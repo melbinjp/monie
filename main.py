@@ -270,6 +270,7 @@ async def main_async():
             telegram.send_message("⚠️ Remember to update your Upstox Token today!\nReply with: `/token <your_token>`")
     
     schedule.every().day.at("09:00").do(token_reminder)
+    schedule.every().day.at("09:14").do(lambda: risk_manager.reset_daily_stats() if is_trading_day() else None)
     schedule.every().day.at("09:15").do(lambda: telegram.send_message("🔔 Market Open!") if is_trading_day() else None)
     schedule.every().day.at("15:30").do(eod_evaluation)
     

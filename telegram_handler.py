@@ -160,8 +160,11 @@ class TelegramHandler:
         elif text == "/status":
             self._handle_status()
             
+        elif text == "/resume":
+            self._handle_resume()
+            
         elif text == "/start":
-            self.send_message("👋 I am Monie! Commands:\n/status — live trades\n/profit — ledger\n/token — auth Upstox\n/kill — emergency halt\n/bus — event bus health")
+            self.send_message("👋 I am Monie! Commands:\n/status — live trades\n/profit — ledger\n/token — auth Upstox\n/kill — emergency halt\n/resume — manual unkill\n/bus — event bus health")
 
     def _handle_kill(self):
         """Emergency remote kill switch — liquidates everything and trips circuit breaker."""
@@ -180,6 +183,14 @@ class TelegramHandler:
                 self.send_message(f"⚠️ Kill executed but square-off had errors: {e}")
         else:
             self.send_message("⚠️ Orchestrator not available. Circuit breaker tripped only.")
+
+    def _handle_resume(self):
+        """Manually clears the circuit breaker and guard after a /kill or crash."""
+        if self.risk_manager:
+            self.risk_manager.reset_circuit_breaker()
+            self.send_message("🟢 **RESUMED**\nCircuit breaker and Black Swan Guard reset. The bot will now take fresh signals and resume trading.")
+        else:
+            self.send_message("⚠️ Risk Manager not available to resume.")
 
     def _handle_bus_stats(self):
         """Returns EventBus health metrics."""

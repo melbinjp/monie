@@ -72,6 +72,22 @@ class RiskManager:
             
         return True, "Risk Check Passed"
 
+    def reset_circuit_breaker(self):
+        """Manually overrides a tripped circuit breaker (e.g. via Telegram /resume)."""
+        self.is_circuit_breaker_tripped = False
+        self.guard_active = False
+        logger.info("🟢 Circuit breaker manually reset. Bot is ready to trade.")
+
+    def reset_daily_stats(self):
+        """Resets daily tracking counters and circuit breakers for a new trading session."""
+        self.current_pnl = 0.0
+        self.daily_trades = 0
+        self.is_circuit_breaker_tripped = False
+        self.guard_active = False
+        self._order_timestamps.clear()
+        self._open_exposure = 0.0
+        logger.info("🌅 Daily Risk Manager stats and circuit breakers reset.")
+
     def can_trade(self):
         """Checks if new trades are permitted."""
         if self.is_circuit_breaker_tripped:
