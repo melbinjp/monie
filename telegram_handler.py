@@ -25,17 +25,20 @@ class TelegramHandler:
         self.last_update_id = 0
         self.running = True
         self.msg_queue = queue.Queue()
+        self.token_updated_today = False  # Tracks if /token was sent today
         
         # References injected after construction by main.py
         self.event_bus = None
         self.orchestrator = None
         self.risk_manager = None
+        self.broker = None
 
-    def inject_dependencies(self, event_bus=None, orchestrator=None, risk_manager=None):
+    def inject_dependencies(self, event_bus=None, orchestrator=None, risk_manager=None, broker=None):
         """Called by main.py after all components are constructed."""
         self.event_bus = event_bus
         self.orchestrator = orchestrator
         self.risk_manager = risk_manager
+        self.broker = broker
 
     def send_message(self, message):
         """Asynchronously queues a message to the user."""
@@ -194,9 +197,13 @@ class TelegramHandler:
             self.send_message("⚠️ EventBus not available.")
 
     def _handle_token_update(self, text: str):
-        """Handles /token command to update Upstox access token."""
+        """Handles /token command to update Upstox access token.
+        Works at ANY time — before market, during market, or after market.
+        Hot-reloads the broker session so no restart is needed.
+        """
         new_token = text.split(" ", 1)[1].strip()
         try:
+            # 1. Write to .env for persistence across restarts
             env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
             with open(env_path, 'r') as file:
                 lines = file.readlines()
@@ -214,8 +221,20 @@ class TelegramHandler:
             with open(env_path, 'w') as file:
                 file.writelines(lines)
             
+            # 2. Update in-memory Config
             Config.UPSTOX_ACCESS_TOKEN = new_token
-            self.send_message("✅ Upstox Token Received & Updated!\nThe Bot will use this token for all new requests today.")
+            self.token_updated_today = True
+            
+            # 3. Hot-reload broker session (no restart needed)
+            reload_msg = ""
+            if self.broker and hasattr(self.broker, 'config'):
+                self.broker.config.UPSTOX_ACCESS_TOKEN = new_token
+                if self.broker.authenticate():
+                    reload_msg = "\n🔄 Broker session hot-reloaded successfully!"
+                else:
+                    reload_msg = "\n⚠️ Token saved but broker re-auth failed. Will retry at next health check."
+            
+            self.send_message(f"✅ Upstox Token Received & Updated!\nThe Bot will use this token for all new requests today.{reload_msg}")
             logger.info("New Upstox token injected via Telegram.")
         except Exception as e:
             self.send_message(f"❌ Failed to update token: {e}")
