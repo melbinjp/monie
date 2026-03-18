@@ -1,0 +1,263 @@
+"""
+Telegram Handler — Async message dispatch, command processing, and daily reports.
+Integrated with: Logger primitive, EventBus (for emergency commands).
+"""
+import requests
+import time
+import threading
+import queue
+import os
+import json
+import pandas as pd
+import datetime
+from config import Config
+from core.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+class TelegramHandler:
+    def __init__(self, token=None, chat_id=None):
+        _token = token or Config.TELEGRAM_TOKEN
+        _chat_id = chat_id or Config.TELEGRAM_CHAT_ID
+        self.base_url = f"https://api.telegram.org/bot{_token}" if _token else None
+        self.chat_id = _chat_id
+        self.last_update_id = 0
+        self.running = True
+        self.msg_queue = queue.Queue()
+        
+        # References injected after construction by main.py
+        self.event_bus = None
+        self.orchestrator = None
+        self.risk_manager = None
+
+    def inject_dependencies(self, event_bus=None, orchestrator=None, risk_manager=None):
+        """Called by main.py after all components are constructed."""
+        self.event_bus = event_bus
+        self.orchestrator = orchestrator
+        self.risk_manager = risk_manager
+
+    def send_message(self, message):
+        """Asynchronously queues a message to the user."""
+        if not self.base_url or not self.chat_id:
+            return
+        self.msg_queue.put(message)
+
+    def _message_dispatcher(self):
+        """Background thread that sends queued messages over the network."""
+        while self.running:
+            try:
+                raw_msg = self.msg_queue.get(timeout=1)
+                
+                # Automatically prepend a timestamp to every outgoing alert
+                timestamp = datetime.datetime.now().strftime("[%X]")
+                formatted_msg = f"⏱️ `{timestamp}`\n{raw_msg}"
+                
+                url = f"{self.base_url}/sendMessage"
+                payload = {"chat_id": self.chat_id, "text": formatted_msg, "parse_mode": "Markdown"}
+                
+                # Retry send with backoff (network can flake)
+                for attempt in range(3):
+                    try:
+                        requests.post(url, json=payload, timeout=5)
+                        break
+                    except requests.exceptions.RequestException:
+                        if attempt < 2:
+                            time.sleep(2 ** attempt)
+                        else:
+                            logger.error(f"Telegram send failed after 3 attempts")
+                
+                self.msg_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"Telegram Async Send Error: {e}")
+
+    def get_updates(self):
+        """Polls for new messages (commands)."""
+        url = f"{self.base_url}/getUpdates"
+        params = {
+            "offset": self.last_update_id + 1,
+            "timeout": 30
+        }
+        try:
+            response = requests.get(url, params=params, timeout=35)
+            return response.json()
+        except Exception:
+            return None
+
+    def calculate_pnl(self):
+        """Reads trades.csv and calculates profit."""
+        try:
+            log_file = getattr(Config, 'LOG_FILE', 'trades.csv')
+            if not os.path.exists(log_file):
+                return "No trades yet."
+                
+            df = pd.read_csv(log_file)
+            if df.empty:
+                return "No trades yet."
+            
+            current_balance = float(df.iloc[-1]['Balance'])
+            initial_balance = float(getattr(Config, 'CAPITAL', 50000.0))
+            pnl = current_balance - initial_balance
+            pnl_pct = (pnl / initial_balance) * 100
+            
+            emoji = "🤑" if pnl >= 0 else "📉"
+            return (
+                f"{emoji} **PnL Report**\n"
+                f"💰 Balance: ₹{current_balance:.2f}\n"
+                f"📈 Profit: ₹{pnl:.2f} ({pnl_pct:.2f}%)"
+            )
+        except Exception:
+            return "Could not read trade history."
+
+    def send_daily_report(self):
+        """Sends a consolidated daily report."""
+        report = self.calculate_pnl()
+        self.send_message(f"📅 **Daily Summary**\n{report}")
+
+    def handle_commands(self):
+        """Main loop for the bot thread."""
+        logger.info("Telegram Bot Listening...")
+        while self.running:
+            updates = self.get_updates()
+            if updates and "result" in updates:
+                for update in updates["result"]:
+                    self.last_update_id = update["update_id"]
+                    
+                    if "message" in update and "text" in update["message"]:
+                        text = update["message"]["text"]
+                        
+                        try:
+                            self._dispatch_command(text)
+                        except Exception as e:
+                            logger.error(f"Telegram command error: {e}")
+                            self.send_message(f"❌ Command error: {e}")
+            
+            time.sleep(1)
+
+    def _dispatch_command(self, text: str):
+        """Routes incoming Telegram commands to handlers."""
+        if text == "/profit":
+            report = self.calculate_pnl()
+            self.send_message(report)
+            
+        elif text == "/ping":
+            self.send_message("🏓 Pong! I am running. Waiting for trades...")
+            
+        elif text == "/kill":
+            self._handle_kill()
+            
+        elif text == "/bus":
+            self._handle_bus_stats()
+            
+        elif text.startswith("/token "):
+            self._handle_token_update(text)
+            
+        elif text == "/status":
+            self._handle_status()
+            
+        elif text == "/start":
+            self.send_message("👋 I am Monie! Commands:\n/status — live trades\n/profit — ledger\n/token — auth Upstox\n/kill — emergency halt\n/bus — event bus health")
+
+    def _handle_kill(self):
+        """Emergency remote kill switch — liquidates everything and trips circuit breaker."""
+        kill_msg = "🔴 **EMERGENCY REMOTE KILL TRIGGERED**\nLiquidating ALL positions and halting trading."
+        logger.critical(kill_msg)
+        self.send_message(kill_msg)
+        
+        if self.risk_manager:
+            self.risk_manager.is_circuit_breaker_tripped = True
+        
+        if self.orchestrator:
+            try:
+                self.orchestrator.square_off_all(reason_msg=kill_msg)
+                self.send_message("✅ All positions squared off. Bot is now HALTED.")
+            except Exception as e:
+                self.send_message(f"⚠️ Kill executed but square-off had errors: {e}")
+        else:
+            self.send_message("⚠️ Orchestrator not available. Circuit breaker tripped only.")
+
+    def _handle_bus_stats(self):
+        """Returns EventBus health metrics."""
+        if self.event_bus:
+            stats = self.event_bus.get_stats()
+            msg = (
+                f"📊 **Event Bus Health**\n"
+                f"Queue: {stats['queue_depth']}/{stats['queue_max']}\n"
+                f"Processed: {stats['events_processed']:,}\n"
+                f"Dropped: {stats['events_dropped']}\n"
+                f"Subscribers: {stats['subscriber_count']}"
+            )
+            self.send_message(msg)
+        else:
+            self.send_message("⚠️ EventBus not available.")
+
+    def _handle_token_update(self, text: str):
+        """Handles /token command to update Upstox access token."""
+        new_token = text.split(" ", 1)[1].strip()
+        try:
+            env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+            with open(env_path, 'r') as file:
+                lines = file.readlines()
+            
+            updated = False
+            for i in range(len(lines)):
+                if lines[i].startswith("UPSTOX_ACCESS_TOKEN="):
+                    lines[i] = f"UPSTOX_ACCESS_TOKEN={new_token}\n"
+                    updated = True
+                    break
+            
+            if not updated:
+                lines.append(f"\nUPSTOX_ACCESS_TOKEN={new_token}\n")
+            
+            with open(env_path, 'w') as file:
+                file.writelines(lines)
+            
+            Config.UPSTOX_ACCESS_TOKEN = new_token
+            self.send_message("✅ Upstox Token Received & Updated!\nThe Bot will use this token for all new requests today.")
+            logger.info("New Upstox token injected via Telegram.")
+        except Exception as e:
+            self.send_message(f"❌ Failed to update token: {e}")
+
+    def _handle_status(self):
+        """Returns current system status."""
+        status_msg = "🤖 **System Health: ONLINE**\n"
+        
+        # Risk Manager info
+        if self.risk_manager:
+            status_msg += f"🛡️ Circuit Breaker: {'🔴 TRIPPED' if self.risk_manager.is_circuit_breaker_tripped else '🟢 OK'}\n"
+            status_msg += f"📊 Daily PnL: ₹{self.risk_manager.current_pnl:.2f}\n"
+            status_msg += f"📈 Trades Today: {self.risk_manager.daily_trades}\n\n"
+        
+        if os.path.exists("bot_state.json"):
+            try:
+                with open("bot_state.json", 'r') as f:
+                    state = json.load(f)
+                if state.get("traded_today"):
+                    status_msg += "✅ **Trades:** Executed Today\n\n**Live Legs:**\n"
+                    legs = state.get("active_legs", {})
+                    active_count = 0
+                    for key, leg in legs.items():
+                        if leg and isinstance(leg, dict) and leg.get("active"):
+                            active_count += 1
+                            status_msg += f"👉 {leg.get('symbol')}\nEntry: ₹{leg.get('entry_price',0):.1f} | SL: ₹{leg.get('sl_price',0):.1f}\n"
+                    if active_count == 0:
+                        status_msg += "All positions have hit Stop Loss or Liquidation!"
+                else:
+                    status_msg += "⏳ **Trades:** Waiting for signal or schedule...\n"
+            except Exception:
+                status_msg += "⚠️ Could not read state.\n"
+        else:
+            status_msg += "⏳ **Trades:** No state file (waiting for trades).\n"
+        self.send_message(status_msg)
+
+    def start(self):
+        """Starts the local polling thread and the async dispatch queue."""
+        t1 = threading.Thread(target=self.handle_commands)
+        t1.daemon = True
+        t1.start()
+        
+        t2 = threading.Thread(target=self._message_dispatcher)
+        t2.daemon = True
+        t2.start()

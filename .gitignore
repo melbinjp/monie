@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# Secrets & Credentials — NEVER COMMIT
+.env
+*.pem
+*.key
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# State & Runtime Files
+bot_state.json
+bot_state.json.bak
+bot_state.json.tmp
+local_state.json
+staging_state.json
+staging_state.json.bak
+staging_state.json.tmp
+
+# Logs
+logs/
+*.log
+
+# Data files (large, regenerable)
+data/
+
+# Reports & Exports
+reports/
+trades_*.csv
+staging_journal_aws.log
+staging_latest.log
+recent_journal.txt
+monie_journal.txt
+
+# Test artifacts
+test_output.txt
+results.txt
+verify_stderr.txt
+final_verification.txt
+diag_output.txt
+compile_results.txt
+
+# OS
+Thumbs.db
+.DS_Store
