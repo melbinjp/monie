@@ -35,6 +35,11 @@ class UpstoxBroker(BaseBroker):
                 self.portfolio_api = upstox_client.PortfolioApi(api_client)
                 self.is_logged_in = True
                 logger.info("✅ Upstox Client Initialized (Using Provided Access Token)")
+                
+                # Also hot-reload the WebSocket token if the background thread is running
+                if hasattr(self, 'ws_client') and self.ws_client:
+                    self.ws_client.access_token = self.config.UPSTOX_ACCESS_TOKEN
+                    
                 return True
             else:
                 logger.error("Upstox requires 'UPSTOX_ACCESS_TOKEN' in .env")

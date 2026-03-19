@@ -242,8 +242,10 @@ async def main_async():
     )
     
     # 8. Start Data Feed
-    if hasattr(broker, 'start_websocket'):
-        broker.start_websocket(on_error_callback=lambda e: logger.error(f"WS Error: {e}"))
+    # If using PaperBroker, the actual data feed is wrapped in 'data_source'
+    actual_data_broker = getattr(broker, 'data_source', broker) or broker
+    if hasattr(actual_data_broker, 'start_websocket'):
+        actual_data_broker.start_websocket(on_error_callback=lambda e: logger.error(f"WS Error: {e}"))
 
     logger.info("⏳ Waiting for Market Hours... (Event Loop Active)")
     

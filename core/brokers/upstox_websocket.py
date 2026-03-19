@@ -59,8 +59,13 @@ class UpstoxWebSocketClient:
 
     async def _connect_and_listen(self):
         while not self._stop_event.is_set():
-            ws_url = self.get_authorized_url()
-            if not ws_url:
+            try:
+                ws_url = self.get_authorized_url()
+                if not ws_url:
+                    time.sleep(5)
+                    continue
+            except Exception as e:
+                logger.error(f"WS Auth Exception: {e}")
                 time.sleep(5)
                 continue
                 
