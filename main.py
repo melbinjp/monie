@@ -246,6 +246,8 @@ async def main_async():
     actual_data_broker = getattr(broker, 'data_source', broker) or broker
     if hasattr(actual_data_broker, 'start_websocket'):
         actual_data_broker.start_websocket(on_error_callback=lambda e: logger.error(f"WS Error: {e}"))
+        # Crucial kickstart: Subscribe to baseline indices to start driving the EventBus
+        actual_data_broker.subscribe(["NSE|Nifty 50", "NSE|INDIA VIX", "NSE|Nifty Bank"])
 
     logger.info("⏳ Waiting for Market Hours... (Event Loop Active)")
     
