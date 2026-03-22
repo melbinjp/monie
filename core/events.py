@@ -57,6 +57,10 @@ class FillEvent(Event):
     fill_price: float = 0.0
     side: str = ""
     commission: float = 0.0
+    ideal_time: float = 0.0          # Exact ping of intent
+    actual_time: float = 0.0         # Exact ping of broker fill
+    decision_latency_ms: float = 0.0 # Time blocked in engine internal queues
+    network_latency_ms: float = 0.0  # Time waiting for broker APIs
 
 @dataclass(frozen=True)
 class SystemEvent(Event):

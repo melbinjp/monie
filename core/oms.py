@@ -1,5 +1,7 @@
 import asyncio
 import time
+import os
+import pandas as pd
 from enum import Enum
 from typing import Dict, Optional
 from core.events import OrderEvent, FillEvent, SignalEvent
@@ -69,6 +71,9 @@ class OrderManagementSystem:
         # 3. Submit to Broker
         self._update_state(event.order_tag, OrderState.SUBMITTED)
         
+        ideal_time = event.timestamp
+        start_exec_time = time.time()
+        
         # Execute broker call in another thread to prevent blocking the event loop
         loop = asyncio.get_running_loop()
         try:
@@ -98,7 +103,12 @@ class OrderManagementSystem:
                  
                  self._update_state(event.order_tag, OrderState.FILLED)
                  
-                 # 4. Emit FillEvent with actual fill price
+                 execution_time = time.time()
+                 decision_latency_ms = (start_exec_time - ideal_time) * 1000.0
+                 network_latency_ms = (execution_time - start_exec_time) * 1000.0
+                 total_latency_ms = decision_latency_ms + network_latency_ms
+                 
+                 # 4. Emit FillEvent with precise latency metrics
                  fill_event = FillEvent(
                      order_id=str(broker_order_id),
                      order_tag=event.order_tag,
@@ -106,10 +116,18 @@ class OrderManagementSystem:
                      fill_qty=event.qty,
                      fill_price=actual_fill_price,
                      side=event.side,
-                     commission=0.0
+                     commission=0.0,
+                     ideal_time=ideal_time,
+                     actual_time=execution_time,
+                     decision_latency_ms=decision_latency_ms,
+                     network_latency_ms=network_latency_ms
                  )
                  self.bus.publish(fill_event)
                  logger.info(f"OMS Dispatched FillEvent for {event.order_tag} @ ₹{actual_fill_price:.2f}")
+                 logger.info(f"⚡ EXECUTION LATENCY [{event.order_tag}]: Total {total_latency_ms:.1f}ms (Engine: {decision_latency_ms:.1f}ms | API: {network_latency_ms:.1f}ms)")
+                 
+                 # 5. Persist to generic global ledger
+                 self._log_execution_metric(fill_event)
                  
                  # Reduce tracked exposure on BUY fills (closing SELL positions)
                  if event.side == "BUY" and actual_fill_price > 0:
@@ -168,3 +186,34 @@ class OrderManagementSystem:
         
         if stale_tags:
             logger.info(f"OMS Memory Cleanup: Purged {len(stale_tags)} stale orders. Active: {len(self.active_orders)}")
+
+    def _log_execution_metric(self, fill: FillEvent):
+        """Appends precision execution latency metrics to the global CSV ledger."""
+        import os
+        from config import Config
+        log_dir = "reports"
+        os.makedirs(log_dir, exist_ok=True)
+        csv_path = os.path.join(log_dir, getattr(Config, 'METRICS_FILE', 'execution_metrics.csv'))
+        
+        data = {
+            "timestamp": fill.actual_time,
+            "order_tag": fill.order_tag,
+            "broker_id": fill.order_id,
+            "symbol": fill.symbol,
+            "side": fill.side,
+            "qty": fill.fill_qty,
+            "price": fill.fill_price,
+            "ideal_time_epoch": fill.ideal_time,
+            "decision_latency_ms": round(fill.decision_latency_ms, 2),
+            "network_latency_ms": round(fill.network_latency_ms, 2),
+            "total_latency_ms": round(fill.decision_latency_ms + fill.network_latency_ms, 2)
+        }
+        
+        try:
+            df = pd.DataFrame([data])
+            if not os.path.exists(csv_path):
+                df.to_csv(csv_path, index=False)
+            else:
+                df.to_csv(csv_path, mode='a', header=False, index=False)
+        except Exception as e:
+            logger.error(f"Failed to write execution metric for {fill.order_tag}: {e}")
