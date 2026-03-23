@@ -148,9 +148,10 @@ async def _run_health_check(broker, risk_manager, orchestrator, telegram):
     """
     loop = asyncio.get_running_loop()
     try:
-        current_pnl = await loop.run_in_executor(None, broker.get_pnl)
-        nifty_ltp = await loop.run_in_executor(None, broker.get_quote, "NSE|Nifty 50")
-        india_vix = await loop.run_in_executor(None, broker.get_quote, "NSE|INDIA VIX")
+        # Wrap REST API calls with strict 5-second timeouts to prevent API deadlocks
+        current_pnl = await asyncio.wait_for(loop.run_in_executor(None, broker.get_pnl), timeout=5.0)
+        nifty_ltp = await asyncio.wait_for(loop.run_in_executor(None, broker.get_quote, "NSE|Nifty 50"), timeout=5.0)
+        india_vix = await asyncio.wait_for(loop.run_in_executor(None, broker.get_quote, "NSE|INDIA VIX"), timeout=5.0)
         
         # Market health
         is_healthy, status = risk_manager.check_market_health(nifty_ltp, None, india_vix)
