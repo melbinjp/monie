@@ -1,0 +1,84 @@
+Mar 22 16:52:06 ip-172-31-45-43 python[2139943]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:52:06 ip-172-31-45-43 python[2139943]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:52:06 ip-172-31-45-43 python[2139943]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:52:17 ip-172-31-45-43 python[2139955]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:52:17 ip-172-31-45-43 python[2139955]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:52:17 ip-172-31-45-43 python[2139955]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:52:28 ip-172-31-45-43 python[2139968]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:52:28 ip-172-31-45-43 python[2139968]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:52:28 ip-172-31-45-43 python[2139968]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:52:39 ip-172-31-45-43 python[2139981]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:52:39 ip-172-31-45-43 python[2139981]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:52:39 ip-172-31-45-43 python[2139981]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:52:50 ip-172-31-45-43 python[2139993]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:52:50 ip-172-31-45-43 python[2139993]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:52:50 ip-172-31-45-43 python[2139993]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:53:01 ip-172-31-45-43 python[2140056]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:53:02 ip-172-31-45-43 python[2140056]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:53:02 ip-172-31-45-43 python[2140056]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:53:13 ip-172-31-45-43 python[2140068]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:53:13 ip-172-31-45-43 python[2140068]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:53:13 ip-172-31-45-43 python[2140068]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:53:24 ip-172-31-45-43 python[2140080]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:53:24 ip-172-31-45-43 python[2140080]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:53:24 ip-172-31-45-43 python[2140080]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:53:34 ip-172-31-45-43 python[2140092]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:53:34 ip-172-31-45-43 python[2140092]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:53:34 ip-172-31-45-43 python[2140092]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:53:46 ip-172-31-45-43 python[2140104]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:53:46 ip-172-31-45-43 python[2140104]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:53:46 ip-172-31-45-43 python[2140104]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:53:57 ip-172-31-45-43 python[2140116]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:53:57 ip-172-31-45-43 python[2140116]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:53:57 ip-172-31-45-43 python[2140116]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:54:08 ip-172-31-45-43 python[2140128]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:54:08 ip-172-31-45-43 python[2140128]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:54:08 ip-172-31-45-43 python[2140128]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:54:19 ip-172-31-45-43 python[2140251]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:54:19 ip-172-31-45-43 python[2140251]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:54:19 ip-172-31-45-43 python[2140251]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:54:30 ip-172-31-45-43 python[2140263]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:54:30 ip-172-31-45-43 python[2140263]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:54:30 ip-172-31-45-43 python[2140263]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:54:41 ip-172-31-45-43 python[2140276]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:54:41 ip-172-31-45-43 python[2140276]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:54:41 ip-172-31-45-43 python[2140276]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:54:52 ip-172-31-45-43 python[2140288]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:54:52 ip-172-31-45-43 python[2140288]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:54:52 ip-172-31-45-43 python[2140288]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:55:04 ip-172-31-45-43 python[2140303]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:55:04 ip-172-31-45-43 python[2140303]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:55:04 ip-172-31-45-43 python[2140303]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:55:14 ip-172-31-45-43 python[2140315]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:55:14 ip-172-31-45-43 python[2140315]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:55:14 ip-172-31-45-43 python[2140315]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:55:25 ip-172-31-45-43 python[2140328]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:55:25 ip-172-31-45-43 python[2140328]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:55:25 ip-172-31-45-43 python[2140328]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:55:36 ip-172-31-45-43 python[2140340]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:55:36 ip-172-31-45-43 python[2140340]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:55:36 ip-172-31-45-43 python[2140340]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:55:47 ip-172-31-45-43 python[2140352]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:55:47 ip-172-31-45-43 python[2140352]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:55:47 ip-172-31-45-43 python[2140352]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:55:58 ip-172-31-45-43 python[2140365]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:55:58 ip-172-31-45-43 python[2140365]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:55:58 ip-172-31-45-43 python[2140365]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:56:09 ip-172-31-45-43 python[2140377]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:56:09 ip-172-31-45-43 python[2140377]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:56:09 ip-172-31-45-43 python[2140377]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:56:19 ip-172-31-45-43 python[2140391]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:56:19 ip-172-31-45-43 python[2140391]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:56:19 ip-172-31-45-43 python[2140391]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:56:30 ip-172-31-45-43 python[2140403]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:56:30 ip-172-31-45-43 python[2140403]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:56:30 ip-172-31-45-43 python[2140403]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:56:41 ip-172-31-45-43 python[2140415]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:56:41 ip-172-31-45-43 python[2140415]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:56:41 ip-172-31-45-43 python[2140415]: Proceeding with potentially expired token. Strategies may fail.
+Mar 22 16:56:45 ip-172-31-45-43 python[2140504]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 22 16:56:45 ip-172-31-45-43 python[2140504]: ❌ Token validation failed after retries. Bot may not trade today.
+Mar 22 16:56:45 ip-172-31-45-43 python[2140504]: Proceeding with potentially expired token. Strategies may fail.
+Mar 23 08:47:05 ip-172-31-45-43 python[2140504]: New Upstox token injected via Telegram.
+Mar 24 00:14:42 ip-172-31-45-43 python[2146387]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 24 00:14:42 ip-172-31-45-43 python[2146387]: ✅ Token validated — Nifty 50 LTP: ₹22512.65

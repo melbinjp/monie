@@ -17,6 +17,8 @@ class UpstoxBroker(BaseBroker):
         self.api_instance = None
         self.quote_instance = None
         self.portfolio_api = None
+        self.options_api = None
+        self.charge_api = None
         self.access_token = None
         self.is_logged_in = False
         self.ws_client = None
@@ -33,6 +35,9 @@ class UpstoxBroker(BaseBroker):
                 self.api_instance = upstox_client.OrderApi(api_client)
                 self.quote_instance = upstox_client.MarketQuoteApi(api_client)
                 self.portfolio_api = upstox_client.PortfolioApi(api_client)
+                self.options_api = upstox_client.OptionsApi(api_client)
+                self.charge_api = upstox_client.ChargeApi(api_client)
+                
                 self.is_logged_in = True
                 logger.info("✅ Upstox Client Initialized (Using Provided Access Token)")
                 
@@ -212,6 +217,81 @@ class UpstoxBroker(BaseBroker):
 
     def get_positions(self):
         pass
+
+    def get_option_chain(self, instrument_key: str, expiry_date: str) -> dict:
+        """
+        Fetches the complete Put-Call option chain for a specific underlying and expiry.
+        Provides native Delta, Theta, Gamma, Vega, and IV.
+        Returns:
+            Dictionary mapped by strike price, where each strike has 'call_options' and 'put_options'.
+        """
+        if not self.is_logged_in or not self.options_api:
+            return {}
+        try:
+            # Clean local prefix if present (Upstox requires strict format)
+            clean_key = instrument_key.replace('NSE_INDEX|', 'NSE_INDEX|').replace('NSE|', 'NSE_INDEX|')
+            res = self.options_api.get_put_call_option_chain(clean_key, expiry_date)
+            
+            chain_map = {}
+            if res and res.data:
+                for option in res.data:
+                    strike = float(option.strike_price)
+                    chain_map[strike] = {
+                        'call_options': option.call_options,
+                        'put_options': option.put_options
+                    }
+            return chain_map
+        except upstox_client.rest.ApiException as e:
+            logger.error(f"Option Chain API Error: {e.reason} ({e.status})")
+            return {}
+        except Exception as e:
+            logger.error(f"Option Chain formatting error: {e}")
+            return {}
+
+    def simulate_margin(self, orders: list) -> float:
+        """
+        Simulates total margin required for a basket of orders using Upstox Charges API.
+        This captures margin benefits from hedging (e.g. Iron Condors).
+        
+        Args:
+            orders: list of dicts [{'symbol': str, 'quantity': int, 'side': str}]
+        Returns:
+            Total margin required as float, or None on failure.
+        """
+        if not self.is_logged_in or not self.charge_api:
+            return None
+        try:
+            instruments = []
+            for o in orders:
+                instrument_token = self._get_instrument_token(o['symbol'])
+                if not instrument_token:
+                    logger.warning(f"Simulate Margin: Failed to resolve token for {o['symbol']}")
+                    return None
+                    
+                instruments.append(
+                    upstox_client.InstrumentMargin(
+                        instrument_token=instrument_token,
+                        quantity=int(o['quantity']),
+                        transaction_type="BUY" if o['side'] == "BUY" else "SELL",
+                        product='I',
+                        order_type="MARKET",
+                        price=0.0
+                    )
+                )
+                
+            req = upstox_client.MarginRequest(instruments=instruments)
+            res = self.charge_api.post_margin(body=req)
+            
+            if res and res.data and res.data.margins:
+                # Upstox returns margin per instrument or total. Depending on exact schema.
+                total_req = sum([getattr(m, 'total_margin', 0.0) for m in res.data.margins])
+                logger.info(f"🔮 Simulated Margin for {len(orders)} legs: ₹{total_req:.2f}")
+                return float(total_req)
+            return None
+            
+        except Exception as e:
+            logger.error(f"Simulate Margin API Error: {e}")
+            return None
 
     def _get_instrument_token(self, symbol):
         symbol_map = {
