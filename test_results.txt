@@ -1,6 +1,0 @@
-=== STANDARD TOKEN API TEST ===
-[1] Market Quote:  OK  -> Nifty = 23306.45
-[2] Option Chain:  OK  -> 0 strikes
-[3] User Funds:    OK
-[4] WebSocket:     FAIL -> HTTP 410
-=== DONE ===

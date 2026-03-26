@@ -5,6 +5,12 @@ An event-driven, multi-strategy options trading bot for Indian equity derivative
 ## Architecture
 
 ```
+Upstox V3 SDK
+  ├── MarketDataStreamerV3 (real-time WebSocket, auto-reconnect)
+  ├── REST API fallback (LTP polling)
+  ├── Analytics API (Option Chain + Greeks)
+  └── Charges API (margin simulation)
+      ↓
 EventBus (async, bounded queue)
   ├── DataSanitizer (tick validation)
   ├── StrategyOrchestrator (manages 4 strategies)
@@ -12,7 +18,7 @@ EventBus (async, bounded queue)
   │   ├── VolatilityHarvester (high-VIX strangle)
   │   ├── ThetaCrusher (far-OTM decay)
   │   └── ExpirydayScalper (Thursday gamma)
-  ├── OMS (order state machine + fill tracking)
+  ├── OMS (order state machine + fill tracking + latency metrics)
   └── RiskManager (circuit breaker + rate limiter + exposure caps)
 ```
 
@@ -25,7 +31,10 @@ EventBus (async, bounded queue)
 - **Staging Pipeline**: 5-level firmware lock — bot must prove profitability in paper mode before live capital is unlocked
 - **Dynamic Capital Sync**: Lot sizing auto-adjusts from actual Upstox wallet balance (handles deposits, withdrawals, profit compounding)
 - **Atomic State Writes**: `os.replace()` pattern prevents JSON corruption on crashes
-- **Telegram Remote Control**: `/status`, `/kill`, `/token`, `/bus` commands
+- **Telegram Remote Control**: `/status`, `/kill`, `/token`, `/bus`, `/logs` commands
+- **Remote Diagnostics**: `/logs` pulls live EC2 terminal output directly to Telegram
+- **Analytics API**: Option Chain with native Greeks (Δ, Θ, Γ, Vega, IV)
+- **Margin Simulation**: Pre-trade margin validation via Upstox Charges API
 - **Graceful Degradation**: Strategies auto-disable after 5 consecutive errors
 
 ## Safety Guarantees

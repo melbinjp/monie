@@ -276,15 +276,38 @@ class TelegramHandler:
             self.send_message(f"❌ Failed to update token: {e}")
 
     def _handle_status(self):
-        """Returns current system status."""
+        """Returns comprehensive system health status."""
         status_msg = "🤖 **System Health: ONLINE**\n"
         
         # Risk Manager info
         if self.risk_manager:
-            status_msg += f"🛡️ Circuit Breaker: {'🔴 TRIPPED' if self.risk_manager.is_circuit_breaker_tripped else '🟢 OK'}\n"
+            cb = '🔴 TRIPPED' if self.risk_manager.is_circuit_breaker_tripped else '🟢 OK'
+            guard = '🔴 ACTIVE' if self.risk_manager.guard_active else '🟢 Normal'
+            status_msg += f"🛡️ Circuit Breaker: {cb}\n"
+            status_msg += f"⚡ Black Swan Guard: {guard}\n"
             status_msg += f"📊 Daily PnL: ₹{self.risk_manager.current_pnl:.2f}\n"
             status_msg += f"📈 Trades Today: {self.risk_manager.daily_trades}\n\n"
         
+        # WebSocket connectivity
+        if self.broker:
+            ws = getattr(self.broker, 'ws_client', None)
+            if ws is None:
+                ws_broker = getattr(self.broker, 'data_source', None)
+                if ws_broker:
+                    ws = getattr(ws_broker, 'ws_client', None)
+            if ws:
+                ws_status = '🟢 Connected' if ws.is_connected else '🔴 Disconnected'
+                cached = len(ws.price_cache)
+                status_msg += f"📡 WebSocket: {ws_status} ({cached} symbols cached)\n"
+            else:
+                status_msg += "📡 WebSocket: ⚪ Not started (REST mode)\n"
+        
+        # EventBus health
+        if self.event_bus:
+            stats = self.event_bus.get_stats()
+            status_msg += f"🔄 EventBus: {stats['events_processed']:,} processed, {stats['events_dropped']} dropped\n\n"
+        
+        # Active trade legs
         if os.path.exists("bot_state.json"):
             try:
                 with open("bot_state.json", 'r') as f:

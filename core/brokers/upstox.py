@@ -155,6 +155,7 @@ class UpstoxBroker(BaseBroker):
                         return self.sanitizer.clean(symbol, raw_price)
             return 0.0
         except Exception as e:
+            logger.debug(f"Quote fetch error for {symbol}: {e}")
             return 0.0
             
     def get_pnl(self):
@@ -216,7 +217,24 @@ class UpstoxBroker(BaseBroker):
             return 0.0
 
     def get_positions(self):
-        pass
+        """Returns current open positions from Upstox portfolio."""
+        if not self.is_logged_in:
+            return {}
+        try:
+            response = self.portfolio_api.get_positions("2.0")
+            if response and response.data:
+                positions = {}
+                for pos in response.data:
+                    sym = getattr(pos, 'trading_symbol', getattr(pos, 'instrument_token', 'UNKNOWN'))
+                    qty = getattr(pos, 'quantity', 0)
+                    avg = getattr(pos, 'average_price', 0.0)
+                    if qty != 0:
+                        positions[sym] = {'qty': qty, 'avg_price': avg}
+                return positions
+            return {}
+        except Exception as e:
+            logger.debug(f"Positions fetch error: {e}")
+            return {}
 
     def get_option_chain(self, instrument_key: str, expiry_date: str) -> dict:
         """

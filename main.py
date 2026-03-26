@@ -7,11 +7,6 @@ Dynamic capital sync from Upstox wallet at boot and EOD.
 import asyncio
 import time
 import os
-
-# OVERRIDE: Global Protobuf Implementation Flag to prevent Duplicate Descriptor crashes
-# while allowing Upstox SDK to import `runtime_version` from newer protobuf libraries.
-os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
-
 import socket
 import schedule
 import datetime

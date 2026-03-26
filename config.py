@@ -44,6 +44,10 @@ class Config:
     USE_HEDGES = False            # Set True for Iron Fly (Safety), False for Straddle (Max Profit)
     HEDGE_DIST = 200              # Buy OTM Wings 200 points away (Iron Fly)
     
+    # Output Files
+    METRICS_FILE = "execution_metrics.csv"  # OMS execution latency ledger
+    LOG_FILE = "trades.csv"                 # Paper trading log
+    
     # Telegram
     TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")

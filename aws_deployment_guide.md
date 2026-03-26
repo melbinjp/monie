@@ -47,6 +47,72 @@
 
 ---
 
-### Next Steps...
-Once you hit "Launch", let me know. 
-I will give you the command to log into this new computer from your terminal and we will upload the Monie bot!
+### Step 8: SSH In & Deploy
+
+```bash
+# Connect to your EC2 instance
+ssh -i monie-key.pem ubuntu@<your-ec2-public-ip>
+
+# Install dependencies
+sudo apt update && sudo apt install python3-pip python3-venv -y
+
+# Upload and set up
+cd ~
+git clone <your_repo_url> monie
+cd monie
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Configure
+cp .env.example .env
+nano .env  # Add your credentials
+```
+
+### Step 9: SystemD Service (Auto-Start on Boot)
+
+Create the service file:
+
+```bash
+sudo nano /etc/systemd/system/monie.service
+```
+
+Paste this content:
+
+```ini
+[Unit]
+Description=Monie Trading Bot
+After=network.target
+
+[Service]
+WorkingDirectory=/home/ubuntu/monie
+Environment=PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+ExecStart=/home/ubuntu/monie/.venv/bin/python main.py
+Restart=always
+User=ubuntu
+
+[Install]
+WantedBy=multi-user.target
+```
+
+> **⚠️ IMPORTANT**: The `Environment=PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python` line is **required** to prevent protobuf descriptor conflicts with the Upstox SDK. Do not remove it.
+
+Enable and start:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable monie
+sudo systemctl start monie
+```
+
+### Step 10: Verify & Monitor
+
+```bash
+# Check status
+sudo systemctl status monie
+
+# View live logs
+sudo journalctl -u monie -f
+
+# Or use Telegram /logs command for remote monitoring
+```
