@@ -163,8 +163,33 @@ class TelegramHandler:
         elif text == "/resume":
             self._handle_resume()
             
+        elif text == "/logs":
+            self._handle_logs()
+            
         elif text == "/start":
-            self.send_message("👋 I am Monie! Commands:\n/status — live trades\n/profit — ledger\n/token — auth Upstox\n/kill — emergency halt\n/resume — manual unkill\n/bus — event bus health")
+            self.send_message("👋 I am Monie! Commands:\n/status — live trades\n/profit — ledger\n/token — auth Upstox\n/kill — emergency halt\n/resume — manual unkill\n/bus — event bus health\n/logs — tail live terminal")
+
+    def _handle_logs(self):
+        """Fetches the last 15 lines of the system journal directly from the OS."""
+        self.send_message("⏳ Fetching live terminal logs from EC2...")
+        import subprocess
+        try:
+            # The ubuntu user is in the adm group, giving read access to journalctl natively.
+            result = subprocess.run(
+                ["journalctl", "-u", "monie", "-n", "15", "--no-pager"], 
+                capture_output=True, text=True, timeout=10
+            )
+            logs = result.stdout.strip()
+            if not logs:
+                logs = "Logs empty or required sudo."
+            
+            # Truncate to safely fit within Telegram's max message limit
+            if len(logs) > 3500:
+                logs = "..." + logs[-3500:]
+                
+            self.send_message(f"💻 **Live Terminal Output**\n```\n{logs}\n```")
+        except Exception as e:
+            self.send_message(f"⚠️ Failed to fetch logs: {e}")
 
     def _handle_kill(self):
         """Emergency remote kill switch — liquidates everything and trips circuit breaker."""

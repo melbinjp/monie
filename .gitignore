@@ -58,3 +58,11 @@ compile_results.txt
 # OS
 Thumbs.db
 .DS_Store
+
+# Temp debug files (from live troubleshooting)
+crash.log
+err.txt
+mon_tokens.txt
+mon_tue_logs.txt
+ec2_crash*.log
+trades.csv
