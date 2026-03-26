@@ -1,0 +1,15 @@
+Mar 26 10:27:14 ip-172-31-45-43 systemd[1]: monie.service: Consumed 1.164s CPU time, 58.3M memory peak, 0B memory swap peak.
+Mar 26 10:27:14 ip-172-31-45-43 systemd[1]: Started monie.service - Monie Trading Bot.
+Mar 26 10:27:15 ip-172-31-45-43 python[2164376]: Starting Monie Bot (Event-Driven Edition)...
+Mar 26 10:27:15 ip-172-31-45-43 python[2164376]: Telegram Bot Listening...
+Mar 26 10:27:15 ip-172-31-45-43 python[2164376]: 📝 Starting in PAPER TRADING Mode...
+Mar 26 10:27:15 ip-172-31-45-43 python[2164376]:    Using UPSTOX for Live Data...
+Mar 26 10:27:15 ip-172-31-45-43 python[2164376]: ✅ Upstox Client Initialized (Using Provided Access Token)
+Mar 26 10:27:15 ip-172-31-45-43 python[2164376]: ✅ UPSTOX Connected for Live Quotes.
+Mar 26 10:27:15 ip-172-31-45-43 python[2164376]: 📝 Paper Trading: Authentication Successful (Simulated)
+Mar 26 10:27:15 ip-172-31-45-43 python[2164376]: EventBus routing engine started.
+Mar 26 10:27:15 ip-172-31-45-43 python[2164376]: ✅ Token validated — Nifty 50 LTP: ₹23306.45
+Mar 26 10:27:15 ip-172-31-45-43 python[2164376]: 🗑️ Discarding stale state from previous day
+Mar 26 10:27:15 ip-172-31-45-43 python[2164376]: 🎯 Orchestrator initialized & wired 4 strategies: ['Straddle', 'VolHarvest', 'ThetaCrush', 'ExpiryScalp']
+Mar 26 10:27:15 ip-172-31-45-43 python[2164376]: Could not start WebSocket client: cannot import name 'runtime_version' from 'google.protobuf' (/home/ubuntu/monie/.venv/lib/python3.12/site-packages/google/protobuf/__init__.py). Falling back to REST polling.
+Mar 26 10:27:15 ip-172-31-45-43 python[2164376]: ⏳ Waiting for Market Hours... (Event Loop Active)
