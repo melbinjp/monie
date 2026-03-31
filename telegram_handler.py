@@ -62,9 +62,10 @@ class TelegramHandler:
                 # Retry send with backoff (network can flake)
                 for attempt in range(3):
                     try:
-                        requests.post(url, json=payload, timeout=5)
+                        # Increased timeout to 10. Telegram API sometimes takes >5s.
+                        requests.post(url, json=payload, timeout=10)
                         break
-                    except requests.exceptions.RequestException:
+                    except requests.exceptions.RequestException as e:
                         if attempt < 2:
                             time.sleep(2 ** attempt)
                         else:
@@ -262,13 +263,24 @@ class TelegramHandler:
             self.token_updated_today = True
             
             # 3. Hot-reload broker session (no restart needed)
+            # Must propagate to the ACTUAL Upstox broker, not just the PaperBroker wrapper
             reload_msg = ""
-            if self.broker and hasattr(self.broker, 'config'):
-                self.broker.config.UPSTOX_ACCESS_TOKEN = new_token
-                if self.broker.authenticate():
-                    reload_msg = "\n🔄 Broker session hot-reloaded successfully!"
-                else:
-                    reload_msg = "\n⚠️ Token saved but broker re-auth failed. Will retry at next health check."
+            if self.broker:
+                # Find the real Upstox data source (PaperBroker wraps it as .data_source)
+                actual_broker = getattr(self.broker, 'data_source', self.broker)
+                if actual_broker and hasattr(actual_broker, 'config'):
+                    actual_broker.config.UPSTOX_ACCESS_TOKEN = new_token
+                    if actual_broker.authenticate():
+                        reload_msg = "\n🔄 Upstox API client re-authenticated!"
+                        # Also reconnect WebSocket with new token
+                        if hasattr(actual_broker, 'ws_client') and actual_broker.ws_client:
+                            actual_broker.ws_client.access_token = new_token
+                            reload_msg += "\n📡 WebSocket token updated."
+                    else:
+                        reload_msg = "\n⚠️ Token saved but Upstox re-auth failed."
+                # Also update the PaperBroker's own config reference
+                if hasattr(self.broker, 'config'):
+                    self.broker.config.UPSTOX_ACCESS_TOKEN = new_token
             
             self.send_message(f"✅ Upstox Token Received & Updated!\nThe Bot will use this token for all new requests today.{reload_msg}")
             logger.info("New Upstox token injected via Telegram.")
@@ -283,8 +295,15 @@ class TelegramHandler:
         if self.risk_manager:
             cb = '🔴 TRIPPED' if self.risk_manager.is_circuit_breaker_tripped else '🟢 OK'
             guard = '🔴 ACTIVE' if self.risk_manager.guard_active else '🟢 Normal'
+            
+            # Extract fast flash crash buffer size
+            buffer_size = 0
+            if hasattr(self.risk_manager.guard, '_price_buffer'):
+                buffer_size = len(self.risk_manager.guard._price_buffer)
+                
             status_msg += f"🛡️ Circuit Breaker: {cb}\n"
-            status_msg += f"⚡ Black Swan Guard: {guard}\n"
+            status_msg += f"⚡ Risk Guard: {guard}\n"
+            status_msg += f"⏱️ Flash Monitor: 🟢 Active ({buffer_size} ticks buffered)\n"
             status_msg += f"📊 Daily PnL: ₹{self.risk_manager.current_pnl:.2f}\n"
             status_msg += f"📈 Trades Today: {self.risk_manager.daily_trades}\n\n"
         
