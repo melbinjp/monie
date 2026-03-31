@@ -70,6 +70,70 @@ class BlackSwanGuard:
             return True
             
         return False
+        
+    # --- New Omni-Market Resilient Rolling Buffer ---
+    
+    def check_flash_crash_rolling(self, current_price, current_vix=15.0):
+        """
+        Ultra-fast rolling check using recent ticks (180-seconds window).
+        Returns:
+            "VELOCITY_SHOCK" = Vertical drop (<5 seconds). Fire Market Liquidation instantly.
+            "HEDGE_MODE" = Structural move (>3 mins) exceeding dynamic VIX limits. Tighten SL gracefully.
+            False = Market is normal.
+        """
+        if current_price is None or current_price <= 0:
+            return False
+            
+        now = _time.time()
+        
+        # Initialize deque if not exists
+        if not hasattr(self, '_price_buffer'):
+            from collections import deque
+            self._price_buffer = deque()
+            
+        self._price_buffer.append((now, current_price))
+        
+        # Evict old prices (> 180 seconds, i.e., 3 mins for ultra-fast structural detection)
+        while self._price_buffer and self._price_buffer[0][0] < now - 180:
+            self._price_buffer.popleft()
+            
+        if len(self._price_buffer) < 5:  # Need minimum datapoints
+            return False
+            
+        # 1. Check for Absolute Velocity Shock (5-Second Vertical Drop)
+        # Using sub-millisecond latency to beat the cascading retail stop-losses
+        prices_5s = [p[1] for p in self._price_buffer if p[0] >= now - 5]
+        if prices_5s:
+            high_5s = max(prices_5s)
+            low_5s = min(prices_5s)
+            
+            drop_5s = (high_5s - current_price) / high_5s
+            rise_5s = (current_price - low_5s) / low_5s
+            
+            # The speed of light threshold: 0.5% move in under 5 seconds is universally a shock, regardless of VIX
+            shock_limit = 0.005 
+            if drop_5s > shock_limit or rise_5s > shock_limit:
+                logger.critical(f"🛑 VELOCITY SHOCK: Vertical 5-Sec Move of {max(drop_5s, rise_5s)*100:.2f}%. Activating Instant Liquidation Protocol!")
+                return "VELOCITY_SHOCK"
+            
+        # 2. Check for Structural Volatility Shock (3-Minute Window)
+        prices_180s = [p[1] for p in self._price_buffer]
+        high_180s = max(prices_180s)
+        low_180s = min(prices_180s)
+        
+        # Dynamic Limit scaled exactly to VIX mathematically. 
+        # Base is 0.5%. At VIX 25, limit stretches to exactly 1.0%.
+        v = current_vix if current_vix and current_vix > 0 else 15.0
+        dynamic_roc_limit = max(0.005, (v / 100) * 0.040)
+        
+        drop_180s = (high_180s - current_price) / high_180s
+        rise_180s = (current_price - low_180s) / low_180s
+        
+        if drop_180s > dynamic_roc_limit or rise_180s > dynamic_roc_limit:
+            logger.critical(f"⚠️ STRUCTURAL VOLATILITY: 3-Min Move {max(drop_180s, rise_180s)*100:.2f}% > Dynamic VIX Limit {dynamic_roc_limit*100:.2f}%. Activating Hedge Mode.")
+            return "HEDGE_MODE"
+            
+        return False
             
     def check_vix(self, current_vix):
         """Checks if India VIX is too high."""

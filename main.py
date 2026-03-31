@@ -22,10 +22,12 @@ from strategies.intraday_straddle import IntradayShortStraddle
 from strategies.volatility_harvester import VolatilityHarvester
 from strategies.theta_crusher import ThetaCrusher
 from strategies.expiryday_scalper import ExpirydayScalper
+from strategies.afternoon_momentum import AfternoonMomentumScalper
 from telegram_handler import TelegramHandler
 from core.logger import get_logger
 
 from core.event_bus import EventBus
+from core.events import CleanTickEvent
 from core.oms import OrderManagementSystem
 from core.staging_manager import StagingManager
 from core.state_manager import StateManager
@@ -34,6 +36,11 @@ logger = get_logger(__name__)
 
 # Health check interval (seconds)
 HEALTH_CHECK_INTERVAL = 30
+
+# Bounded thread pool for health check REST calls.
+# Prevents thread exhaustion from timed-out API calls over multi-day uptime.
+from concurrent.futures import ThreadPoolExecutor
+_health_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="health")
 
 
 def get_broker_instance(config, event_bus):
@@ -143,15 +150,19 @@ async def validate_token(broker, telegram):
 
 async def _run_health_check(broker, risk_manager, orchestrator, telegram):
     """
-    Non-blocking health check. Runs broker REST calls in executor 
-    to prevent freezing the EventBus.
+    Non-blocking health check. Runs broker REST calls in a dedicated executor
+    to prevent freezing the EventBus. Uses a bounded thread pool to avoid
+    exhaustion from timed-out calls over multi-day uptime.
     """
     loop = asyncio.get_running_loop()
     try:
-        # Wrap REST API calls with strict 5-second timeouts to prevent API deadlocks
-        current_pnl = await asyncio.wait_for(loop.run_in_executor(None, broker.get_pnl), timeout=5.0)
-        nifty_ltp = await asyncio.wait_for(loop.run_in_executor(None, broker.get_quote, "NSE|Nifty 50"), timeout=5.0)
-        india_vix = await asyncio.wait_for(loop.run_in_executor(None, broker.get_quote, "NSE|INDIA VIX"), timeout=5.0)
+        # Use the module-level bounded executor instead of the default (prevents thread leak)
+        current_pnl = await asyncio.wait_for(
+            loop.run_in_executor(_health_executor, broker.get_pnl), timeout=8.0)
+        nifty_ltp = await asyncio.wait_for(
+            loop.run_in_executor(_health_executor, broker.get_quote, "NSE|Nifty 50"), timeout=8.0)
+        india_vix = await asyncio.wait_for(
+            loop.run_in_executor(_health_executor, broker.get_quote, "NSE|INDIA VIX"), timeout=8.0)
         
         # Market health
         is_healthy, status = risk_manager.check_market_health(nifty_ltp, None, india_vix)
@@ -172,8 +183,39 @@ async def _run_health_check(broker, risk_manager, orchestrator, telegram):
             if risk_manager.is_circuit_breaker_tripped:
                 orchestrator.square_off_all(reason_msg=circuit_breaker_msg)
                 
+    except asyncio.TimeoutError:
+        logger.warning("Health check timed out (API unresponsive for 8s)")
     except Exception as e:
-        logger.error(f"Health check failed (non-fatal): {e}")
+        logger.error(f"Health check failed (non-fatal): {type(e).__name__}: {e}")
+
+def _fast_flash_crash_monitor(event, risk_manager, orchestrator, telegram, broker):
+    """EventBus hook for instant wartime flash crash detection."""
+    if hasattr(event, "symbol") and getattr(event, "symbol") == "NSE|Nifty 50":
+        # Pull latest VIX from broker cache (since this is firing sub-millisecond on every trade)
+        vix = 15.0
+        try:
+            if hasattr(broker, 'get_quote'):
+                cached = broker.get_quote("NSE|INDIA VIX")
+                if cached and cached > 0: vix = cached
+        except: pass
+        
+        status = risk_manager.guard.check_flash_crash_rolling(event.ltp, current_vix=vix)
+        
+        if status == "VELOCITY_SHOCK":
+            if not getattr(risk_manager, 'alert_sent', False):
+                risk_manager.is_circuit_breaker_tripped = True
+                msg = f"🛡️ **OMEGA VELOCITY SHOCK TRIPPED**\n\nAbsolute Vertical Move (>0.5% in 5s). Liquidating instantly to frontrun cascading stops!"
+                logger.critical(msg)
+                if telegram: telegram.send_message(msg)
+                risk_manager.alert_sent = True
+                orchestrator.square_off_all(reason_msg=msg)
+                
+        elif status == "HEDGE_MODE" and not risk_manager.in_hedge_mode:
+            risk_manager.in_hedge_mode = True
+            msg = f"⚠️ **OMNI-MARKET RESILIENCY**\n\nStructural VIX limits breached (3-Min). Entering Hedge Mode: No new entries. Trailing stops severely tightened."
+            logger.critical(msg)
+            if telegram: telegram.send_message(msg)
+            orchestrator.activate_hedge_mode()
 
 
 async def main_async():
@@ -231,8 +273,12 @@ async def main_async():
         VolatilityHarvester(**common_args),
         ThetaCrusher(**common_args),
         ExpirydayScalper(**common_args),
+        AfternoonMomentumScalper(**common_args),
     ]
     orchestrator = StrategyOrchestrator(strategies, event_bus, telegram=telegram)
+
+    # 6.5 Wire up ultra-fast Omni-Market Flash Crash monitor
+    event_bus.subscribe(CleanTickEvent, lambda e: _fast_flash_crash_monitor(e, risk_manager, orchestrator, telegram, broker))
     
     # 7. Inject dependencies into Telegram for /kill and /bus commands
     telegram.inject_dependencies(
@@ -247,6 +293,8 @@ async def main_async():
     actual_data_broker = getattr(broker, 'data_source', broker) or broker
     if hasattr(actual_data_broker, 'start_websocket'):
         actual_data_broker.start_websocket(on_error_callback=lambda e: logger.error(f"WS Error: {e}"))
+        # Allow WS connection to establish before subscribing (V3 SDK connects async)
+        await asyncio.sleep(2)
         # Crucial kickstart: Subscribe to baseline indices to start driving the EventBus
         actual_data_broker.subscribe(["NSE|Nifty 50", "NSE|INDIA VIX", "NSE|Nifty Bank"])
 

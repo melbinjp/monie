@@ -22,6 +22,14 @@ class PaperBroker(BaseBroker):
         self.data_source = data_source_broker
         self.is_logged_in = True
         self.sanitizer = DataSanitizer()  # Primitive 2
+    
+    def __getattr__(self, name):
+        """Delegate any unimplemented method to the underlying data source broker.
+        This ensures methods like get_available_margin(), get_option_chain(),
+        simulate_margin(), start_websocket() work transparently in Paper mode."""
+        if self.data_source and hasattr(self.data_source, name):
+            return getattr(self.data_source, name)
+        raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}' (data_source also missing it)")
         
     def authenticate(self):
         logger.info("📝 Paper Trading: Authentication Successful (Simulated)")

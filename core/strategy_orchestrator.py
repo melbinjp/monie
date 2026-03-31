@@ -112,6 +112,20 @@ class StrategyOrchestrator:
             except Exception as e:
                 logger.error(f"❌ Failed to square off {strategy.get_name()}: {e}")
 
+    def activate_hedge_mode(self):
+        """Signals all strategies to transition into a protective stance."""
+        msg = "🛡️ Orchestrator: HEDGE MODE ACTIVATED across all active strategies. Tightening Stops."
+        logger.warning(msg)
+        if self.telegram:
+            self.telegram.send_message(msg)
+            
+        for strategy in self.strategies:
+            if hasattr(strategy, 'activate_hedge_mode'):
+                try:
+                    strategy.activate_hedge_mode()
+                except Exception as e:
+                    logger.error(f"❌ Failed to activate hedge mode on {strategy.get_name()}: {e}")
+
     @property
     def traded_today(self):
         """Returns True if ANY strategy has traded today."""

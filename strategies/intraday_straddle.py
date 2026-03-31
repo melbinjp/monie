@@ -448,6 +448,27 @@ class IntradayShortStraddle(BaseStrategy):
             if self.telegram: self.telegram.send_message(surge_msg)
             self.square_off_all(reason_msg=surge_msg)
             self.traded_today = False
+            
+    def activate_hedge_mode(self):
+        """
+        Omni-Market Resilience Trigger:
+        Severely tightens trailing stops on all active short legs.
+        Forces the strategy to rely on price action taking it out near current levels 
+        rather than blunt market-selling into a liquidity vacuum.
+        """
+        for leg, name in [(getattr(self, 'ce_leg', None), "CE"), (getattr(self, 'pe_leg', None), "PE")]:
+            if leg and leg.get('active'):
+                try:
+                    current_ltp = self.broker.get_quote(leg['symbol'])
+                    if current_ltp and current_ltp > 0:
+                        # Tighten to current price + 5% buffer, overriding the wide 25% SL
+                        # Ensuring we are at least locking breakeven if in profit
+                        tight_sl = min(leg['entry_price'], current_ltp * 1.05)
+                        if tight_sl < leg['sl_price']:
+                            leg['sl_price'] = tight_sl
+                            self.logger.warning(f"🛡️ Hedge Mode: {name} SL violently tightened to ₹{tight_sl:.1f} (LTP: ₹{current_ltp:.1f})")
+                except: pass
+        self._save_state()
 
     def _check_theta_exit(self):
         if not self.ce_leg and not getattr(self, 'pe_leg', None): return False

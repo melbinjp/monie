@@ -24,6 +24,7 @@ class RiskManager:
         # Initialize Guard
         self.guard = BlackSwanGuard()
         self.guard_active = False
+        self.in_hedge_mode = False
         
         # Rate limiter: sliding window of order timestamps
         self._order_timestamps = deque()
@@ -76,6 +77,7 @@ class RiskManager:
         """Manually overrides a tripped circuit breaker (e.g. via Telegram /resume)."""
         self.is_circuit_breaker_tripped = False
         self.guard_active = False
+        self.in_hedge_mode = False
         logger.info("🟢 Circuit breaker manually reset. Bot is ready to trade.")
 
     def reset_daily_stats(self):
@@ -84,6 +86,7 @@ class RiskManager:
         self.daily_trades = 0
         self.is_circuit_breaker_tripped = False
         self.guard_active = False
+        self.in_hedge_mode = False
         self._order_timestamps.clear()
         self._open_exposure = 0.0
         logger.info("🌅 Daily Risk Manager stats and circuit breakers reset.")
@@ -102,6 +105,20 @@ class RiskManager:
         can_trade, reason = self.can_trade()
         if not can_trade:
              return False, reason
+             
+        # 0. Hedge Mode check (Block Entries, Allow Exits)
+        if self.in_hedge_mode:
+            # We assume order_tags with 'EXIT', 'Abort', or 'SquareOff' are exits, 
+            # and generic ones are entries. Since Monie uses tags heavily.
+            is_exit = False
+            if event.tag and ("EXIT" in event.tag.upper() or "ABORT" in event.tag.upper()):
+                is_exit = True
+            # Also if it's BUYing to close a SELL position, roughly guessing by open exposure
+            if not is_exit and event.side == "BUY" and self._open_exposure > 0:
+                is_exit = True  # Loose heuristic for exiting shorts
+                
+            if not is_exit:
+                return False, "🛑 HEDGE MODE ACTIVE: New entries are suspended due to structural volatility."
         
         # 1. Fat-finger qty check
         if event.qty > 1800:
