@@ -202,17 +202,17 @@ class UpstoxWebSocketClient:
         except Exception as e:
             logger.debug(f"V3 message decode error: {e}")
 
-    def _on_error(self, error):
+    def _on_error(self, *args):
         """Called when V3 SDK WebSocket encounters an error."""
-        logger.error(f"WS V3 Error: {error}")
+        logger.error(f"WS V3 Error: {args}")
         self.is_connected = False
         if self.on_error_callback:
-            self.on_error_callback(error)
+            self.on_error_callback(args)
 
-    def _on_close(self):
+    def _on_close(self, *args):
         """Called when V3 SDK WebSocket closes."""
         self.is_connected = False
-        logger.warning("WS V3 connection closed. Will auto-reconnect.")
+        logger.warning(f"WS V3 connection closed {args}. Auto-reconnect triggered.")
 
     def subscribe(self, symbols: list):
         """Subscribe to additional instrument keys."""

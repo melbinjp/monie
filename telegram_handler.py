@@ -272,10 +272,18 @@ class TelegramHandler:
                     actual_broker.config.UPSTOX_ACCESS_TOKEN = new_token
                     if actual_broker.authenticate():
                         reload_msg = "\n🔄 Upstox API client re-authenticated!"
-                        # Also reconnect WebSocket with new token
-                        if hasattr(actual_broker, 'ws_client') and actual_broker.ws_client:
-                            actual_broker.ws_client.access_token = new_token
-                            reload_msg += "\n📡 WebSocket token updated."
+                        try:
+                            if hasattr(actual_broker, 'ws_client') and actual_broker.ws_client:
+                                actual_broker.ws_client.stop()
+                                
+                            if hasattr(actual_broker, 'start_websocket'):
+                                import time
+                                actual_broker.start_websocket(on_error_callback=lambda e: logger.error(f"WS Error: {e}"))
+                                time.sleep(2)
+                                actual_broker.subscribe(["NSE|Nifty 50", "NSE|INDIA VIX", "NSE|Nifty Bank"])
+                                reload_msg += "\n📡 WebSocket restarted and tracking."
+                        except Exception as we:
+                            reload_msg += f"\n⚠️ WebSocket restart error: {we}"
                     else:
                         reload_msg = "\n⚠️ Token saved but Upstox re-auth failed."
                 # Also update the PaperBroker's own config reference
