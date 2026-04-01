@@ -111,7 +111,7 @@ class RiskManager:
             # We assume order_tags with 'EXIT', 'Abort', or 'SquareOff' are exits, 
             # and generic ones are entries. Since Monie uses tags heavily.
             is_exit = False
-            if event.tag and ("EXIT" in event.tag.upper() or "ABORT" in event.tag.upper()):
+            if event.order_tag and ("EXIT" in event.order_tag.upper() or "ABORT" in event.order_tag.upper()):
                 is_exit = True
             # Also if it's BUYing to close a SELL position, roughly guessing by open exposure
             if not is_exit and event.side == "BUY" and self._open_exposure > 0:

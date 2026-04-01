@@ -130,7 +130,7 @@ class AfternoonMomentumScalper(BaseStrategy):
             qty=qty,
             side="BUY",
             order_type="MARKET",
-            tag=self.order_tag,
+            order_tag=self.order_tag,
             price=opt_price
         )
         self.event_bus.publish(event)
@@ -217,7 +217,7 @@ class AfternoonMomentumScalper(BaseStrategy):
                 qty=50,
                 side="SELL",
                 order_type="MARKET",
-                tag=exit_tag,
+                order_tag=exit_tag,
                 price=0.0
             )
             self.event_bus.publish(event)

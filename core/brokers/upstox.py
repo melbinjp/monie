@@ -3,6 +3,7 @@ from upstox_client.rest import ApiException
 from core.brokers.base_broker import BaseBroker
 from core.logger import get_logger
 from core.data_sanitizer import DataSanitizer
+from core.rate_limiter import RateLimiter
 import pandas as pd
 import datetime
 import threading
@@ -23,9 +24,9 @@ class UpstoxBroker(BaseBroker):
         self.is_logged_in = False
         self.ws_client = None
         self.sanitizer = DataSanitizer(event_bus=self.event_bus)  # Primitive 2: Clean all quotes
+        self.rate_limiter = RateLimiter()  # Upstox API rate limit enforcement
         
         # REST Polling Fallback Architecture
-        import threading
         self._active_subscriptions = set()
         self._stop_event = threading.Event()
         self._poller_thread = None
@@ -119,6 +120,7 @@ class UpstoxBroker(BaseBroker):
         import time as _time
         for attempt in range(3):
             try:
+                self.rate_limiter.acquire()  # Enforce Upstox API rate limits
                 api_response = self.api_instance.place_order(body, "2.0")
                 logger.info(f"✅ Order Placed [{order_tag}]: {side} {quantity}x {symbol} → {api_response.data.order_id}")
                 return api_response.data.order_id
@@ -148,13 +150,14 @@ class UpstoxBroker(BaseBroker):
         try:
             instrument_token = self._get_instrument_token(symbol)
             
-            # --- WebSocket Fast Path ---
+            # --- WebSocket Fast Path (no rate limit cost) ---
             if getattr(self.config, 'USE_WEBSOCKET', False) and self.ws_client:
                 cached_price = self.ws_client.get_cached_price(instrument_token)
                 if cached_price > 0:
                     return self.sanitizer.clean(symbol, cached_price)
                     
-            # --- REST Polling Fallback (reuse existing quote_instance) ---
+            # --- REST Polling Fallback (rate limited) ---
+            self.rate_limiter.acquire()
             api_response = self.quote_instance.ltp(instrument_token, "2.0")
             
             if api_response and api_response.data:
@@ -171,6 +174,7 @@ class UpstoxBroker(BaseBroker):
         """Returns total PnL from Upstox positions (reuses single ApiClient)."""
         if not self.is_logged_in: return 0.0
         try:
+            self.rate_limiter.acquire()
             response = self.portfolio_api.get_positions("2.0")
             if response and response.data:
                 total_pnl = 0.0
@@ -191,13 +195,14 @@ class UpstoxBroker(BaseBroker):
     def get_available_margin(self) -> float:
         """Fetches actual available margin from Upstox wallet.
         
-        Upstox SDK returns response.data as a dict, with 'equity' value
-        being a string repr of a Python dict. We parse it to get available_margin.
+        Upstox SDK returns response.data with 'equity' value that may be
+        a dict, SDK model object, or (legacy) a string repr of a Python dict.
         """
         if not self.is_logged_in:
             return 0.0
         try:
-            import ast
+            import json as _json
+            self.rate_limiter.acquire()
             user_api = upstox_client.UserApi(self.api_instance.api_client)
             response = user_api.get_user_fund_margin("2.0")
             if response and response.data:
@@ -206,15 +211,18 @@ class UpstoxBroker(BaseBroker):
                 equity_raw = data.get('equity') if isinstance(data, dict) else getattr(data, 'equity', None)
                 
                 if equity_raw:
-                    # Equity value may be a string repr of a dict e.g. "{'available_margin': 88070.0, ...}"
                     if isinstance(equity_raw, str):
-                        equity = ast.literal_eval(equity_raw)
+                        # Legacy: string repr like "{'available_margin': 88070.0}"
+                        # Replace single quotes with double quotes for valid JSON
+                        equity = _json.loads(equity_raw.replace("'", '"'))
                     elif isinstance(equity_raw, dict):
                         equity = equity_raw
                     else:
-                        # SDK model object
-                        equity = {'available_margin': getattr(equity_raw, 'available_margin', 0.0),
-                                  'used_margin': getattr(equity_raw, 'used_margin', 0.0)}
+                        # SDK model object — extract attributes safely
+                        equity = {
+                            'available_margin': getattr(equity_raw, 'available_margin', 0.0),
+                            'used_margin': getattr(equity_raw, 'used_margin', 0.0)
+                        }
                     
                     available = float(equity.get('available_margin', 0.0))
                     used = float(equity.get('used_margin', 0.0))
@@ -230,6 +238,7 @@ class UpstoxBroker(BaseBroker):
         if not self.is_logged_in:
             return {}
         try:
+            self.rate_limiter.acquire()
             response = self.portfolio_api.get_positions("2.0")
             if response and response.data:
                 positions = {}
@@ -397,7 +406,7 @@ class UpstoxBroker(BaseBroker):
     def _rest_poller_loop(self):
         """
         Actively checks if WebSocket is dead. If so, fetches Market Quotes for all subscriptions.
-        Strictly rate-limited to 1.5 sec loops to remain safely under the 2,000 req / 30 min cap.
+        Rate-limited via the global RateLimiter — skips cycles when budget is exhausted.
         """
         import time
         from core.events import TickEvent
@@ -412,6 +421,11 @@ class UpstoxBroker(BaseBroker):
             if not self._active_subscriptions:
                 time.sleep(1.0)
                 continue
+
+            # Rate limiter gate — skip this cycle if budget is exhausted
+            if not self.rate_limiter.try_acquire():
+                time.sleep(0.5)
+                continue
                 
             try:
                 # Convert readable symbols to Instrument Tokens
@@ -424,7 +438,7 @@ class UpstoxBroker(BaseBroker):
                         token_to_sym[t] = sym
                         
                 if not tokens:
-                    time.sleep(1.5)
+                    time.sleep(1.0)
                     continue
                     
                 comma_separated_tokens = ",".join(tokens)
@@ -439,7 +453,7 @@ class UpstoxBroker(BaseBroker):
                                 tick = TickEvent(symbol=sym, ltp=clean_price, timestamp=time.time())
                                 self.event_bus.publish(tick)
             except Exception as e:
-                pass # Suppress to prevent log spam during rate limits
+                logger.debug(f"REST poller cycle error: {e}")
                 
-            # Crucial Rate Limit Enforcer: 1.5s guarantees < 1,200 reqs/30min
-            time.sleep(1.5)
+            # Small pause between cycles to prevent CPU spin
+            time.sleep(0.5)

@@ -1,9 +1,11 @@
 """
 Primitive 2: Data Sanitizer
-Never trust raw broker data. Maintains Last-Known-Good (LKG) values
-and a 3-tick moving average to prevent strategy flapping from API glitches.
+Never trust raw broker data. Maintains Last-Known-Good (LKG) values,
+a 10-tick rolling window for Z-score outlier detection, and spike
+rejection to prevent strategy flapping from API glitches.
 """
 import time
+import math
 from collections import defaultdict
 from core.logger import get_logger
 from core.events import TickEvent, CleanTickEvent
@@ -19,7 +21,7 @@ class DataSanitizer:
     def __init__(self, max_age_seconds: float = 120.0, event_bus = None):
         self._lkg = {}          # symbol -> last known good price
         self._lkg_time = {}     # symbol -> timestamp of LKG
-        self._history = defaultdict(list)  # symbol -> last 3 prices (moving avg)
+        self._history = defaultdict(list)  # symbol -> last 10 prices (rolling window)
         self._max_age = max_age_seconds
         
         self.event_bus = event_bus
@@ -40,15 +42,31 @@ class DataSanitizer:
     def clean(self, symbol: str, raw_price: float) -> float:
         """
         Returns a sanitized price. Rules:
-        1. If raw_price <= 0 → return LKG (if fresh) or 0.0
-        2. If raw_price spikes > 50% vs LKG in < 2s → reject as glitch, return LKG
-        3. Otherwise accept, update LKG and history
+        1.   If raw_price <= 0 → return LKG (if fresh) or 0.0
+        1.5  Z-Score outlier: if |price - mean| > 3σ over 10-tick window → reject
+        2.   If raw_price spikes > 50% vs LKG in < 2s → reject as glitch, return LKG
+        3.   Otherwise accept, update LKG and history
         """
         now = time.time()
 
         # Rule 1: Reject zero/negative
         if raw_price is None or raw_price <= 0:
             return self._get_lkg(symbol, now)
+
+        # Rule 1.5: Z-Score outlier detection (needs >= 5 data points for meaningful stats)
+        history = self._history[symbol]
+        if len(history) >= 5:
+            mean = sum(history) / len(history)
+            variance = sum((p - mean) ** 2 for p in history) / len(history)
+            std_dev = math.sqrt(variance)
+            if std_dev > 0:
+                z_score = abs(raw_price - mean) / std_dev
+                if z_score > 3.0:
+                    logger.warning(
+                        f"🛡️ SANITIZER: Z-score outlier for {symbol}: "
+                        f"₹{raw_price:.2f} (z={z_score:.1f}, mean=₹{mean:.2f}, σ=₹{std_dev:.2f})"
+                    )
+                    return self._get_lkg(symbol, now)
 
         # Rule 2: Spike rejection (> 50% jump from LKG within 2 seconds)
         if symbol in self._lkg and symbol in self._lkg_time:
@@ -63,19 +81,18 @@ class DataSanitizer:
                     )
                     return self._lkg[symbol]
 
-        # Accept — update LKG and rolling history
+        # Rule 3: Accept — update LKG and rolling history
         self._lkg[symbol] = raw_price
         self._lkg_time[symbol] = now
 
-        history = self._history[symbol]
         history.append(raw_price)
-        if len(history) > 3:
+        if len(history) > 10:
             history.pop(0)
 
         return raw_price
 
     def get_smoothed(self, symbol: str) -> float:
-        """Returns 3-tick moving average for strategy-gate decisions (e.g., VIX checks)."""
+        """Returns 10-tick moving average for strategy-gate decisions (e.g., VIX checks)."""
         history = self._history.get(symbol, [])
         if not history:
             return self._lkg.get(symbol, 0.0)
@@ -88,3 +105,4 @@ class DataSanitizer:
             if age <= self._max_age:
                 return self._lkg[symbol]
         return 0.0
+

@@ -1,7 +1,25 @@
 import time
 import datetime
+from enum import Enum, auto
 from strategies.base_strategy import BaseStrategy
 from core.events import CleanTickEvent, FillEvent, OrderEvent
+from core.dynamic_stagger import DynamicStaggerEngine
+
+
+class StrategyState(Enum):
+    """Formal state machine for the Intraday Short Straddle lifecycle."""
+    IDLE = auto()             # Before 09:23 — waiting for entry window
+    ENTRY_WINDOW = auto()     # 09:23-09:45 — scanning for entry signal
+    CE_PENDING = auto()       # CE order emitted, waiting for OMS fill
+    STAGGER_WAIT = auto()     # Dynamic stagger timer running (VIX + RoC + Liquidity)
+    PE_PENDING = auto()       # PE order emitted, waiting for OMS fill
+    ACTIVE = auto()           # Both legs live, monitoring multi-tier trailing SLs
+    THETA_CHECK = auto()      # After 14:00, evaluating early exit on theta decay
+    SL_TRIGGERED = auto()     # Processing SL hit + breakout offense
+    BREAKOUT = auto()         # Managing the long breakout leg
+    ABORT = auto()            # Stagger aborted due to CE drift, unwinding
+    SQUARED_OFF = auto()      # All positions closed, day done
+
 
 class IntradayShortStraddle(BaseStrategy):
     def get_name(self) -> str:
@@ -27,19 +45,39 @@ class IntradayShortStraddle(BaseStrategy):
         self.hedge_legs = []
         
         self.vix_at_entry = 15.0
+        self.vix_now = 15.0
         self.entry_timestamp = None
         self.last_vix_check = None
         self.prev_day_vix = None
         self._last_state_save = 0
         self.pending_orders = set()
 
-        # Asynchronous State Machine tracking
-        self.waiting_for_pe = False
+        # --- State Machine ---
+        self.state = StrategyState.IDLE
         self.ce_filled_time = 0
         self.pe_target_sym = None
         self.pe_target_qty = 0
         self.pe_target_price = 0.0
+        self._stagger_computed_delay = 15.0  # Will be set by DynamicStaggerEngine
 
+        # --- Dynamic Stagger Engine ---
+        self.stagger_engine = DynamicStaggerEngine(config)
+
+        # State dispatch table — maps StrategyState → handler method
+        self._state_handlers = {
+            StrategyState.IDLE: self._handle_idle,
+            StrategyState.ENTRY_WINDOW: self._handle_entry_window,
+            StrategyState.CE_PENDING: self._handle_ce_pending,
+            StrategyState.STAGGER_WAIT: self._handle_stagger_wait,
+            StrategyState.PE_PENDING: self._handle_pe_pending,
+            StrategyState.ACTIVE: self._handle_active,
+            StrategyState.THETA_CHECK: self._handle_theta_check,
+            StrategyState.BREAKOUT: self._handle_breakout,
+            StrategyState.SQUARED_OFF: None,  # No-op
+            StrategyState.ABORT: None,        # Handled by on_fill
+        }
+
+        # --- State Recovery from Crash ---
         if self.state_manager and self.state_manager.state.get("traded_today"):
             today_str = str(datetime.datetime.now().date())
             if self.state_manager.state.get("last_trade_date") == today_str:
@@ -57,7 +95,20 @@ class IntradayShortStraddle(BaseStrategy):
                 if meta.get("entry_timestamp"):
                     self.entry_timestamp = datetime.datetime.fromisoformat(meta.get("entry_timestamp"))
                 
-                msg = f"🔄 System Rebooted. Recovered Live Active Straddle (VIX baseline: {self.vix_at_entry:.1f})."
+                # Determine recovered state based on active legs
+                has_active_short = (self.ce_leg and self.ce_leg.get('active')) or \
+                                   (self.pe_leg and self.pe_leg.get('active'))
+                has_active_long = (self.long_ce_leg and self.long_ce_leg.get('active')) or \
+                                  (self.long_pe_leg and self.long_pe_leg.get('active'))
+                
+                if has_active_long and not has_active_short:
+                    self.state = StrategyState.BREAKOUT
+                elif has_active_short:
+                    self.state = StrategyState.ACTIVE
+                else:
+                    self.state = StrategyState.SQUARED_OFF
+                
+                msg = f"🔄 System Rebooted. Recovered state: {self.state.name} (VIX baseline: {self.vix_at_entry:.1f})."
                 self.logger.info(msg)
                 if self.telegram: self.telegram.send_message(msg)
                 
@@ -75,46 +126,274 @@ class IntradayShortStraddle(BaseStrategy):
     def get_atm_strike(self, spot_price, step=50):
         return step * round(spot_price / step)
 
+    # ====================================================================
+    #  MAIN EVENT HANDLER — State Machine Dispatch
+    # ====================================================================
+
     def on_tick(self, event: CleanTickEvent):
-        """Event-Driven Fast Path Triggered by EventBus"""
+        """Event-Driven Fast Path: dispatches to current state handler."""
         try:
-            # Organically capture VIX updates
+            # Organically capture VIX updates (always, regardless of state)
             if event.symbol in ("NSE_INDEX|India VIX", "NSE|INDIA VIX"):
                 self.vix_now = event.ltp
 
-            now = datetime.datetime.now().time()
+            # Feed underlying price to stagger engine for RoC calculation
+            if event.symbol in ("NSE|Nifty 50", "NSE_INDEX|Nifty 50"):
+                self.stagger_engine.on_tick(event.ltp)
 
-            # 1. ENTRY LOGIC
-            if now >= self.entry_time and now <= self.max_entry_time and not self.traded_today:
-                if len(self.pending_orders) == 0:
-                    if self.waiting_for_pe:
-                        # 2-minute stagger wait complete?
-                        if time.time() - self.ce_filled_time >= 120:
-                            self._execute_delayed_pe()
-                    else:
-                        # Initial Entry Mode
-                        if self.check_risk():
-                            self._initiate_straddle_sequence()
+            # Dispatch to current state handler
+            handler = self._state_handlers.get(self.state)
+            if handler:
+                handler(event)
 
-            # 2. THETA DECAY EARLY EXIT (After 2:00 PM)
-            elif self.traded_today and now >= self.theta_exit_time and now < self.exit_time:
-                if self._check_theta_exit(): return
-                self._mid_session_vix_check()
-                self._monitor_tick(event)
-            
-            # 3. MONITORING
-            elif self.traded_today and now < self.exit_time:
-                self._mid_session_vix_check()
-                self._monitor_tick(event)
-                
-            # 4. EOD EXIT
-            elif now >= self.exit_time and self.traded_today:
-                self.square_off_all()
-                self.traded_today = False
-                if self.state_manager: self.state_manager.clear_active_legs()
-                
         except Exception as e:
-            self.logger.error(f"Strategy Error in on_tick: {e}")
+            self.logger.error(f"Strategy Error in on_tick (state={self.state.name}): {e}")
+
+    # ====================================================================
+    #  STATE HANDLERS
+    # ====================================================================
+
+    def _handle_idle(self, event: CleanTickEvent):
+        """IDLE → ENTRY_WINDOW when 09:23 is reached."""
+        now = datetime.datetime.now().time()
+        if now >= self.entry_time and now <= self.max_entry_time:
+            self.state = StrategyState.ENTRY_WINDOW
+            self.logger.info(f"📊 State: IDLE → ENTRY_WINDOW ({now})")
+            self._handle_entry_window(event)  # Process immediately
+
+    def _handle_entry_window(self, event: CleanTickEvent):
+        """ENTRY_WINDOW → CE_PENDING when risk check passes and entry is initiated."""
+        now = datetime.datetime.now().time()
+        if now > self.max_entry_time:
+            # Past entry window without trading — done for today
+            self.state = StrategyState.SQUARED_OFF
+            self.traded_today = True
+            self.logger.info("⏰ Entry window expired. No trade today.")
+            return
+
+        if len(self.pending_orders) == 0:
+            if self.check_risk():
+                self._initiate_straddle_sequence()
+                if self.pending_orders:  # CE order was actually emitted
+                    self.state = StrategyState.CE_PENDING
+                    self.logger.info("📊 State: ENTRY_WINDOW → CE_PENDING")
+
+    def _handle_ce_pending(self, event: CleanTickEvent):
+        """CE_PENDING: waiting for CE fill. Transition happens in on_fill()."""
+        # No action on tick — we're waiting for the OMS FillEvent
+        pass
+
+    def _handle_stagger_wait(self, event: CleanTickEvent):
+        """STAGGER_WAIT: dynamic delay running. Check if PE should fire."""
+        elapsed = time.time() - self.ce_filled_time
+
+        # Check CE drift abort condition
+        if self.ce_leg:
+            ce_check = self.broker.get_quote(self.ce_leg['symbol'])
+            if ce_check > 0 and self.ce_leg['entry_price'] > 0:
+                ce_drift_pct = ((ce_check - self.ce_leg['entry_price']) / self.ce_leg['entry_price']) * 100
+                if ce_drift_pct > 10:
+                    # ABORT — CE drifted too much, market is trending
+                    abort_msg = f"🚫 STAGGER ABORT: CE drifted +{ce_drift_pct:.1f}% in {elapsed:.0f}s. Market trending. Exiting CE only."
+                    self.logger.info(abort_msg)
+                    if self.telegram: self.telegram.send_message(abort_msg)
+                    
+                    exit_tag = self.broker.generate_order_tag(self.get_name(), self.ce_leg['symbol'], "BUY", "Abort")
+                    self.pending_orders.add(exit_tag)
+                    self.event_bus.publish(OrderEvent(order_tag=exit_tag, strategy_id=self.get_name(), symbol=self.ce_leg['symbol'], qty=self.ce_leg['qty'], side="BUY"))
+                    self.ce_leg['active'] = False
+                    self.state = StrategyState.ABORT
+                    self.traded_today = True
+                    self.logger.info("📊 State: STAGGER_WAIT → ABORT")
+                    return
+
+        # Check PE firing gate (delay + liquidity via DynamicStaggerEngine)
+        pe_bid, pe_ask = 0.0, 0.0  # TODO: fetch from broker orderbook if available
+        if self.stagger_engine.should_fire_pe(elapsed, self._stagger_computed_delay, pe_bid, pe_ask):
+            self._execute_pe_leg()
+
+    def _handle_pe_pending(self, event: CleanTickEvent):
+        """PE_PENDING: waiting for PE fill. Transition happens in on_fill()."""
+        # No action on tick — waiting for OMS FillEvent
+        pass
+
+    def _handle_active(self, event: CleanTickEvent):
+        """ACTIVE: both legs live. Monitor trailing SLs and VIX surges."""
+        now = datetime.datetime.now().time()
+
+        # Check for theta exit window (after 2 PM)
+        if now >= self.theta_exit_time and now < self.exit_time:
+            self.state = StrategyState.THETA_CHECK
+            self._handle_theta_check(event)
+            return
+
+        # EOD exit
+        if now >= self.exit_time:
+            self.square_off_all()
+            self.traded_today = False
+            if self.state_manager: self.state_manager.clear_active_legs()
+            self.state = StrategyState.SQUARED_OFF
+            self.logger.info("📊 State: ACTIVE → SQUARED_OFF (EOD)")
+            return
+
+        # Mid-session VIX surge check + trailing SL monitoring
+        self._mid_session_vix_check()
+        self._monitor_tick(event)
+
+    def _handle_theta_check(self, event: CleanTickEvent):
+        """THETA_CHECK: after 14:00, evaluate early exit on high decay."""
+        now = datetime.datetime.now().time()
+
+        # EOD exit takes priority
+        if now >= self.exit_time:
+            self.square_off_all()
+            self.traded_today = False
+            if self.state_manager: self.state_manager.clear_active_legs()
+            self.state = StrategyState.SQUARED_OFF
+            self.logger.info("📊 State: THETA_CHECK → SQUARED_OFF (EOD)")
+            return
+
+        if self._check_theta_exit():
+            self.state = StrategyState.SQUARED_OFF
+            self.logger.info("📊 State: THETA_CHECK → SQUARED_OFF (Theta Exit)")
+            return
+
+        # Continue monitoring while in theta window
+        self._mid_session_vix_check()
+        self._monitor_tick(event)
+
+    def _handle_breakout(self, event: CleanTickEvent):
+        """BREAKOUT: managing long breakout leg(s) after SL trigger."""
+        now = datetime.datetime.now().time()
+
+        # EOD exit
+        if now >= self.exit_time:
+            self.square_off_all()
+            self.traded_today = False
+            if self.state_manager: self.state_manager.clear_active_legs()
+            self.state = StrategyState.SQUARED_OFF
+            self.logger.info("📊 State: BREAKOUT → SQUARED_OFF (EOD)")
+            return
+
+        # Monitor the breakout legs (trailing SL logic is in _monitor_tick)
+        self._monitor_tick(event)
+
+        # Check if all breakout legs have exited
+        has_active = False
+        for leg in [self.long_ce_leg, self.long_pe_leg]:
+            if leg and leg.get('active'):
+                has_active = True
+                break
+        # Also check remaining short legs
+        for leg in [self.ce_leg, self.pe_leg]:
+            if leg and leg.get('active'):
+                has_active = True
+                break
+
+        if not has_active:
+            self.state = StrategyState.SQUARED_OFF
+            self.logger.info("📊 State: BREAKOUT → SQUARED_OFF (All legs closed)")
+
+    # ====================================================================
+    #  PE LEG EXECUTION (extracted from old _execute_delayed_pe)
+    # ====================================================================
+
+    def _execute_pe_leg(self):
+        """Fires the PE leg order. Called when stagger delay + liquidity gate pass."""
+        pe_tag = self.broker.generate_order_tag(self.get_name(), self.pe_target_sym, "SELL", "Entry")
+        self.pending_orders.add(pe_tag)
+        self.event_bus.publish(OrderEvent(order_tag=pe_tag, strategy_id=self.get_name(), symbol=self.pe_target_sym, qty=self.pe_target_qty, side="SELL", price=self.pe_target_price))
+        self.state = StrategyState.PE_PENDING
+        self.logger.info(f"⚡ Leg 2: Emitting PE Order {self.pe_target_sym} (delay={self._stagger_computed_delay:.0f}s)")
+        self.logger.info("📊 State: STAGGER_WAIT → PE_PENDING")
+
+    # ====================================================================
+    #  OMS FILL CALLBACK — Drives State Transitions
+    # ====================================================================
+
+    def on_fill(self, event: FillEvent):
+        """OMS Callback — records state and drives FSM transitions."""
+        if event.order_tag in self.pending_orders:
+            self.pending_orders.remove(event.order_tag)
+            
+            # Handle OMS rejection (zero-qty FillEvent)
+            if event.fill_qty == 0:
+                self.logger.warning(f"⚠️ Order REJECTED: {event.order_tag} — clearing from pending set")
+                if self.state == StrategyState.CE_PENDING:
+                    self.state = StrategyState.ENTRY_WINDOW
+                    self.logger.warning("CE rejected → back to ENTRY_WINDOW")
+                elif self.state == StrategyState.PE_PENDING:
+                    # PE rejected — we still have CE leg active, treat as abort
+                    self.state = StrategyState.ACTIVE if self.ce_leg and self.ce_leg.get('active') else StrategyState.SQUARED_OFF
+                    self.traded_today = True
+                    self.logger.warning(f"PE rejected → {self.state.name}")
+                return
+            
+            # Identify which leg this corresponds to
+            if event.side == "SELL":
+                # CE Entry fill
+                if event.symbol.endswith("CE") and self.state == StrategyState.CE_PENDING:
+                    self.ce_leg = {
+                        "symbol": event.symbol, 
+                        "entry_price": event.fill_price, 
+                        "sl_price": event.fill_price * (1 + self.sl_percentage),
+                        "qty": event.fill_qty,
+                        "active": True
+                    }
+                    self.ce_filled_time = time.time()
+                    
+                    # Calculate dynamic stagger delay
+                    self._stagger_computed_delay = self.stagger_engine.calculate_delay(self.vix_now)
+                    
+                    self.state = StrategyState.STAGGER_WAIT
+                    self._save_state()
+                    self.logger.info(
+                        f"✅ CE Leg Filled @ ₹{event.fill_price}. "
+                        f"Dynamic stagger: {self._stagger_computed_delay:.0f}s "
+                        f"(layer={self.stagger_engine.last_decision_layer})"
+                    )
+                    self.logger.info("📊 State: CE_PENDING → STAGGER_WAIT")
+                    
+                # PE Entry fill
+                elif event.symbol == self.pe_target_sym and self.state == StrategyState.PE_PENDING:
+                    self.pe_leg = {
+                        "symbol": event.symbol, 
+                        "entry_price": event.fill_price, 
+                        "sl_price": event.fill_price * (1 + self.sl_percentage),
+                        "qty": event.fill_qty,
+                        "active": True
+                    }
+                    self.traded_today = True
+                    self.entry_timestamp = datetime.datetime.now()
+                    self.state = StrategyState.ACTIVE
+                    self._save_state()
+                    self.logger.info(f"✅ PE Leg Filled @ ₹{event.fill_price}. Straddle Deployed.")
+                    self.logger.info("📊 State: PE_PENDING → ACTIVE")
+
+                    if self.staging_manager:
+                        entry_time_str = self.entry_timestamp.strftime("%H:%M:%S")
+                        premium_diff = abs(self.ce_leg['entry_price'] - self.pe_leg['entry_price']) if self.ce_leg else 0
+                        self.staging_manager.record_entry_accuracy(entry_time_str, premium_diff)
+                    
+            elif event.side == "BUY":
+                # Exit fills or Breakout entries
+                if self.ce_leg and self.ce_leg.get("symbol") == event.symbol:
+                     self.ce_leg['active'] = False
+                     self.logger.info(f"✅ CE Leg Closed @ ₹{event.fill_price}")
+                elif self.pe_leg and self.pe_leg.get("symbol") == event.symbol:
+                     self.pe_leg['active'] = False
+                     self.logger.info(f"✅ PE Leg Closed @ ₹{event.fill_price}")
+                     
+                self._save_state()
+
+                # If in ABORT state and CE has been exited, transition to SQUARED_OFF
+                if self.state == StrategyState.ABORT:
+                    self.state = StrategyState.SQUARED_OFF
+                    self.logger.info("📊 State: ABORT → SQUARED_OFF")
+
+    # ====================================================================
+    #  ENTRY LOGIC (unchanged from original)
+    # ====================================================================
 
     def _initiate_straddle_sequence(self):
         msg = "⚡ 09:23 AM: Executing Holy Trinity Alpha... fetching Spot & VIX."
@@ -134,6 +413,7 @@ class IntradayShortStraddle(BaseStrategy):
                 self.logger.info(gate_msg)
                 if self.telegram: self.telegram.send_message(gate_msg)
                 self.traded_today = True
+                self.state = StrategyState.SQUARED_OFF
                 return
         if vix_now > 0: self.prev_day_vix = vix_now
 
@@ -149,14 +429,7 @@ class IntradayShortStraddle(BaseStrategy):
         
         # --- PHASE 9: Analytics API Integration (O(1) Option Chain Fetch) ---
         if hasattr(self.broker, 'get_option_chain'):
-            # Formulate expiry date payload (assuming current weekly expiry logic, but Upstox takes exact date)
-            # Instead of guessing expiry, we rely on the _get_instrument_token which auto-fetches master
-            # To fetch option chain, we need the underlying instrument key
             underlying_token = self.broker._get_instrument_token("NSE|Nifty 50")
-            
-            # Use current string date as a fallback, or dynamically parse from master. 
-            # Note: Since determining exact weekly expiry string for API format is complex dynamically, 
-            # we will grab the master contracts just for the ATM strikes.
             pass
             
         # Fallback/standard mapping (optimized)
@@ -192,14 +465,12 @@ class IntradayShortStraddle(BaseStrategy):
         # --- PHASE 9: Simulation API Integration (Dynamic Margin Lot Sizing) ---
         current_capital = getattr(self.risk_manager, 'capital', 50000.0)
         
-        # Test required margin for 1 NIFTY Lot (25 qty) using Upstox Simulator
         simulated_margin_1_lot = 80000.0 # fallback
         if hasattr(self.broker, 'simulate_margin'):
             sim = self.broker.simulate_margin([{'symbol': atm_ce, 'quantity': 25, 'side': 'SELL'}])
             if sim and sim > 0:
                 simulated_margin_1_lot = float(sim)
         
-        # Calculate exactly how many lots we can sell without rejection
         max_lots = int((current_capital * 0.90) / simulated_margin_1_lot)
         lots = max(1, min(10, max_lots))
         
@@ -208,7 +479,7 @@ class IntradayShortStraddle(BaseStrategy):
         elif vix_ltp > 20 and lots > 1: lots -= 1
         qty = lots * 25 # Current Nifty Lot Size is 25
 
-        # STAGGERED ENTRY: Sell CE Now, stage PE
+        # STAGGERED ENTRY: Sell CE Now, stage PE for dynamic stagger
         self.pe_target_sym = atm_pe
         self.pe_target_qty = qty
         self.pe_target_price = pe_price
@@ -217,95 +488,15 @@ class IntradayShortStraddle(BaseStrategy):
         self.pending_orders.add(ce_tag)
         self.event_bus.publish(OrderEvent(order_tag=ce_tag, strategy_id=self.get_name(), symbol=atm_ce, qty=qty, side="SELL", price=ce_price))
 
-        msg = f"⚡ Leg 1: Emitting CE Order {atm_ce}. Waiting 2 min for PE."
+        msg = f"⚡ Leg 1: Emitting CE Order {atm_ce}. Dynamic stagger will determine PE timing."
         self.logger.info(msg)
-        self.waiting_for_pe = True
 
         if hasattr(self.broker, 'subscribe'):
             self.broker.subscribe([atm_ce, atm_pe])
 
-    def _execute_delayed_pe(self):
-        """Fires exactly 2 minutes after CE enters via state machine tick."""
-        self.waiting_for_pe = False
-        
-        ce_drift_pct = 0.0
-        if self.ce_leg:
-            ce_check = self.broker.get_quote(self.ce_leg['symbol'])
-            if ce_check > 0 and self.ce_leg['entry_price'] > 0:
-                ce_drift_pct = ((ce_check - self.ce_leg['entry_price']) / self.ce_leg['entry_price']) * 100
-        
-        # Abort if trending hard
-        if ce_drift_pct > 10:
-            abort_msg = f"🚫 STAGGER ABORT: CE drifted +{ce_drift_pct:.1f}% in 2 min. Market trending. Exiting CE only."
-            self.logger.info(abort_msg)
-            if self.telegram: self.telegram.send_message(abort_msg)
-            
-            exit_tag = self.broker.generate_order_tag(self.get_name(), self.ce_leg['symbol'], "BUY", "Abort")
-            self.pending_orders.add(exit_tag)
-            self.event_bus.publish(OrderEvent(order_tag=exit_tag, strategy_id=self.get_name(), symbol=self.ce_leg['symbol'], qty=self.ce_leg['qty'], side="BUY"))
-            self.ce_leg['active'] = False
-            self.traded_today = True
-            return
-
-        # Proceed with PE
-        pe_tag = self.broker.generate_order_tag(self.get_name(), self.pe_target_sym, "SELL", "Entry")
-        self.pending_orders.add(pe_tag)
-        self.event_bus.publish(OrderEvent(order_tag=pe_tag, strategy_id=self.get_name(), symbol=self.pe_target_sym, qty=self.pe_target_qty, side="SELL", price=self.pe_target_price))
-        self.logger.info("⚡ Leg 2: Emitting PE Order...")
-
-    def on_fill(self, event: FillEvent):
-        """OMS Callback to record state accurately."""
-        if event.order_tag in self.pending_orders:
-            self.pending_orders.remove(event.order_tag)
-            
-            # Handle OMS rejection (zero-qty FillEvent)
-            if event.fill_qty == 0:
-                self.logger.warning(f"⚠️ Order REJECTED: {event.order_tag} — clearing from pending set")
-                # If CE entry was rejected, abort stagger sequence
-                if self.waiting_for_pe and event.side == "SELL" and event.symbol.endswith("CE"):
-                    self.waiting_for_pe = False
-                    self.logger.warning("Stagger sequence aborted due to CE rejection")
-                return
-            
-            # Identify which leg this corresponds to
-            if event.side == "SELL":
-                # Is it CE Entry?
-                if event.symbol.endswith("CE") and self.waiting_for_pe:
-                    self.ce_leg = {
-                        "symbol": event.symbol, 
-                        "entry_price": event.fill_price, 
-                        "sl_price": event.fill_price * (1 + self.sl_percentage),
-                        "qty": event.fill_qty,
-                        "active": True
-                    }
-                    self.ce_filled_time = time.time()
-                    self._save_state()
-                    self.logger.info(f"✅ Straddle CE Leg Filled @ ₹{event.fill_price}. Timer for PE started.")
-                    
-                # Is it PE Entry?
-                elif event.symbol == self.pe_target_sym:
-                    self.pe_leg = {
-                        "symbol": event.symbol, 
-                        "entry_price": event.fill_price, 
-                        "sl_price": event.fill_price * (1 + self.sl_percentage),
-                        "qty": event.fill_qty,
-                        "active": True
-                    }
-                    self.traded_today = True
-                    self.entry_timestamp = datetime.datetime.now()
-                    self._save_state()
-                    self.logger.info(f"✅ Straddle PE Leg Filled @ ₹{event.fill_price}. Straddle Deployed.")
-                    
-            elif event.side == "BUY":
-                # Exit fills or Breakout entries
-                if self.ce_leg and self.ce_leg.get("symbol") == event.symbol:
-                     self.ce_leg['active'] = False
-                     self.logger.info(f"✅ CE Leg Closed @ ₹{event.fill_price}")
-                elif self.pe_leg and self.pe_leg.get("symbol") == event.symbol:
-                     self.pe_leg['active'] = False
-                     self.logger.info(f"✅ PE Leg Closed @ ₹{event.fill_price}")
-                     
-                self._save_state()
+    # ====================================================================
+    #  MONITORING (unchanged logic from original, now called by state handlers)
+    # ====================================================================
 
     def _monitor_tick(self, event: CleanTickEvent):
         """Evaluates logic on the exact heartbeat of a tick data point."""
@@ -396,11 +587,13 @@ class IntradayShortStraddle(BaseStrategy):
             if self.pe_leg and self.pe_leg.get('active'):
                 pe_ltp = self.broker.get_quote(self.pe_leg['symbol'])
                 if pe_ltp > 0:
-                    # Lock at tighter of breakeven or current_ltp + 10% of entry
                     tight_sl = min(self.pe_leg['entry_price'], pe_ltp + (self.pe_leg['entry_price'] * 0.10))
                     self.pe_leg['sl_price'] = tight_sl
                 else:
                     self.pe_leg['sl_price'] = self.pe_leg['entry_price']
+            
+            self.state = StrategyState.BREAKOUT
+            self.logger.info("📊 State: ACTIVE → BREAKOUT (CE SL Hit)")
             self._save_state()
 
         elif self.pe_leg and self.pe_leg.get('active') and event.symbol == self.pe_leg['symbol'] and ltp >= self.pe_leg['sl_price']:
@@ -431,7 +624,14 @@ class IntradayShortStraddle(BaseStrategy):
                     self.ce_leg['sl_price'] = tight_sl
                 else:
                     self.ce_leg['sl_price'] = self.ce_leg['entry_price']
+            
+            self.state = StrategyState.BREAKOUT
+            self.logger.info("📊 State: ACTIVE → BREAKOUT (PE SL Hit)")
             self._save_state()
+
+    # ====================================================================
+    #  VIX SURGE, THETA EXIT, HEDGE MODE, SQUARE OFF (unchanged logic)
+    # ====================================================================
 
     def _mid_session_vix_check(self):
         now = datetime.datetime.now()
@@ -448,21 +648,19 @@ class IntradayShortStraddle(BaseStrategy):
             if self.telegram: self.telegram.send_message(surge_msg)
             self.square_off_all(reason_msg=surge_msg)
             self.traded_today = False
+            self.state = StrategyState.SQUARED_OFF
+            self.logger.info("📊 State: → SQUARED_OFF (VIX Surge)")
             
     def activate_hedge_mode(self):
         """
         Omni-Market Resilience Trigger:
         Severely tightens trailing stops on all active short legs.
-        Forces the strategy to rely on price action taking it out near current levels 
-        rather than blunt market-selling into a liquidity vacuum.
         """
         for leg, name in [(getattr(self, 'ce_leg', None), "CE"), (getattr(self, 'pe_leg', None), "PE")]:
             if leg and leg.get('active'):
                 try:
                     current_ltp = self.broker.get_quote(leg['symbol'])
                     if current_ltp and current_ltp > 0:
-                        # Tighten to current price + 5% buffer, overriding the wide 25% SL
-                        # Ensuring we are at least locking breakeven if in profit
                         tight_sl = min(leg['entry_price'], current_ltp * 1.05)
                         if tight_sl < leg['sl_price']:
                             leg['sl_price'] = tight_sl
