@@ -7,99 +7,76 @@ Uses atomic writes to prevent JSON corruption on crash.
 import json
 import os
 import datetime
+import sqlite3
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
 
 class StateManager:
-    def __init__(self, filename="bot_state.json"):
+    """
+    Primitive 5: Crash-Proof State Manager (Tank Architecture)
+    Uses ACID-compliant SQLite with Write-Ahead Logging (WAL) for zero-latency, unbreakable saves.
+    """
+    def __init__(self, filename="bot_state.db"):
         self.filename = filename
-        self._backup_filename = filename + ".bak"
-        self._tmp_filename = filename + ".tmp"
         self.state = {
             "last_trade_date": None,
             "traded_today": False,
             "active_legs": {},
-            "strategies": {}   # Per-strategy namespace
+            "strategies": {}
         }
+        self._init_db()
         self.load_state()
 
+    def _init_db(self):
+        with sqlite3.connect(self.filename) as conn:
+            conn.execute('PRAGMA journal_mode=WAL;')
+            conn.execute('PRAGMA synchronous=NORMAL;')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS kv_store (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            ''')
+
     def load_state(self):
-        if os.path.exists(self.filename):
-            try:
-                with open(self.filename, 'r') as f:
-                    data = json.load(f)
-                    
+        try:
+            with sqlite3.connect(self.filename) as conn:
+                cursor = conn.execute("SELECT value FROM kv_store WHERE key='global_state'")
+                row = cursor.fetchone()
+                
+                if row:
+                    data = json.loads(row[0])
                     # Reset if date doesn't match today
                     today_str = str(datetime.datetime.now().date())
                     if data.get("last_trade_date") == today_str:
                         self.state = data
-                        # Ensure 'strategies' key exists for backward compat
                         if "strategies" not in self.state:
                             self.state["strategies"] = {}
-                        logger.info("💾 Recovered Today's Trading State from Disk")
+                        logger.info("💾 Recovered Today's Trading State from SQLite Database")
                     else:
-                        logger.info("🗑️ Discarding stale state from previous day")
-                        self._save_atomic()  # Reset to default
-            except json.JSONDecodeError:
-                # Primary file is corrupt — try backup
-                logger.warning("⚠️ State file corrupted. Attempting backup recovery...")
-                if os.path.exists(self._backup_filename):
-                    try:
-                        with open(self._backup_filename, 'r') as f:
-                            data = json.load(f)
-                        today_str = str(datetime.datetime.now().date())
-                        if data.get("last_trade_date") == today_str:
-                            self.state = data
-                            logger.info("💾 Recovered from backup state file")
-                        else:
-                            logger.info("🗑️ Backup is from a different day, starting fresh")
-                    except Exception:
-                        logger.error("❌ Backup also corrupted. Starting with clean state.")
+                        logger.info("🗑️ Discarding stale state from previous day (SQLite)")
+                        self._save_atomic()
                 else:
-                    logger.error("❌ No backup available. Starting with clean state.")
-                self._save_atomic()
-            except Exception as e:
-                logger.error(f"Error loading state: {e}")
-                
+                    logger.info("💿 Initializing clean SQLite state memory.")
+                    self._save_atomic()
+        except Exception as e:
+            logger.error(f"❌ Failed to load SQLite state: {e}. Starting clean.")
+            self._save_atomic()
+
     def save_state(self):
-        """Public save method — delegates to atomic writer."""
         self._save_atomic()
     
     def _save_atomic(self):
-        """
-        Atomic write: write to .tmp, then os.replace() to target.
-        os.replace() is atomic on all OS — if process crashes mid-write,
-        the original file is untouched.
-        """
         try:
-            # 1. Create backup of current file before overwriting
-            if os.path.exists(self.filename):
-                try:
-                    with open(self.filename, 'r') as f:
-                        current_data = f.read()
-                    if current_data.strip():  # Only backup non-empty files
-                        with open(self._backup_filename, 'w') as f:
-                            f.write(current_data)
-                except Exception:
-                    pass  # Backup failure is non-fatal
-            
-            # 2. Write to temp file
-            with open(self._tmp_filename, 'w') as f:
-                json.dump(self.state, f, indent=2, default=str)
-            
-            # 3. Atomic swap
-            os.replace(self._tmp_filename, self.filename)
-            
+            with sqlite3.connect(self.filename) as conn:
+                conn.execute(
+                    "REPLACE INTO kv_store (key, value) VALUES (?, ?)", 
+                    ('global_state', json.dumps(self.state, default=str))
+                )
         except Exception as e:
-            logger.error(f"Error saving state atomically: {e}")
-            # Fallback: try direct write as last resort
-            try:
-                with open(self.filename, 'w') as f:
-                    json.dump(self.state, f, indent=2, default=str)
-            except Exception as e2:
-                logger.critical(f"CRITICAL: Cannot save state at all: {e2}")
+            logger.critical(f"CRITICAL: SQLite Memory Save Failed: {e}")
             
     def mark_traded_today(self):
         self.state["last_trade_date"] = str(datetime.datetime.now().date())

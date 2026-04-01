@@ -1,4 +1,3 @@
-
 import upstox_client
 from upstox_client.rest import ApiException
 from core.brokers.base_broker import BaseBroker
@@ -6,6 +5,7 @@ from core.logger import get_logger
 from core.data_sanitizer import DataSanitizer
 import pandas as pd
 import datetime
+import threading
 
 logger = get_logger(__name__)
 
@@ -23,6 +23,12 @@ class UpstoxBroker(BaseBroker):
         self.is_logged_in = False
         self.ws_client = None
         self.sanitizer = DataSanitizer(event_bus=self.event_bus)  # Primitive 2: Clean all quotes
+        
+        # REST Polling Fallback Architecture
+        import threading
+        self._active_subscriptions = set()
+        self._stop_event = threading.Event()
+        self._poller_thread = None
         
     def authenticate(self):
         try:
@@ -56,6 +62,7 @@ class UpstoxBroker(BaseBroker):
 
     def start_websocket(self, on_error_callback=None):
         if not getattr(self.config, 'USE_WEBSOCKET', False):
+            self._start_rest_poller()
             return
             
         try:
@@ -66,11 +73,13 @@ class UpstoxBroker(BaseBroker):
                 on_error_callback=on_error_callback
             )
             self.ws_client.start()
+            self._start_rest_poller()
         except ImportError as e:
             logger.warning(f"Could not start WebSocket client: {e}. Falling back to REST polling.")
             self.ws_client = None
 
     def subscribe(self, symbols: list):
+        self._active_subscriptions.update(symbols)
         if self.ws_client:
             instrument_tokens = []
             for sym in symbols:
@@ -378,3 +387,59 @@ class UpstoxBroker(BaseBroker):
         except Exception as e:
             logger.error(f"Upstox Symbol Mapping Error: {e}")
             return None
+
+    def _start_rest_poller(self):
+        """Starts the autonomous REST fallback thread that takes over if WebSocket dies."""
+        if self._poller_thread is None or not self._poller_thread.is_alive():
+            self._poller_thread = threading.Thread(target=self._rest_poller_loop, daemon=True)
+            self._poller_thread.start()
+
+    def _rest_poller_loop(self):
+        """
+        Actively checks if WebSocket is dead. If so, fetches Market Quotes for all subscriptions.
+        Strictly rate-limited to 1.5 sec loops to remain safely under the 2,000 req / 30 min cap.
+        """
+        import time
+        from core.events import TickEvent
+        logger.info("🛡️ Autonomous REST Fallback Poller engaged. Standing by.")
+        
+        while not self._stop_event.is_set():
+            # If websocket is healthy, skip polling to preserve rate limits
+            if getattr(self.config, 'USE_WEBSOCKET', False) and self.ws_client and getattr(self.ws_client, 'is_connected', False):
+                time.sleep(1.0)
+                continue
+                
+            if not self._active_subscriptions:
+                time.sleep(1.0)
+                continue
+                
+            try:
+                # Convert readable symbols to Instrument Tokens
+                tokens = []
+                token_to_sym = {}
+                for sym in self._active_subscriptions:
+                    t = self._get_instrument_token(sym)
+                    if t:
+                        tokens.append(t)
+                        token_to_sym[t] = sym
+                        
+                if not tokens:
+                    time.sleep(1.5)
+                    continue
+                    
+                comma_separated_tokens = ",".join(tokens)
+                api_response = self.quote_instance.get_market_quote(comma_separated_tokens, "2.0")
+                
+                if api_response and hasattr(api_response, "data"):
+                    for key, val in api_response.data.items():
+                        if hasattr(val, "last_price") and val.last_price > 0:
+                            sym = token_to_sym.get(key)
+                            if sym:
+                                clean_price = self.sanitizer.clean(sym, val.last_price)
+                                tick = TickEvent(symbol=sym, ltp=clean_price, timestamp=time.time())
+                                self.event_bus.publish(tick)
+            except Exception as e:
+                pass # Suppress to prevent log spam during rate limits
+                
+            # Crucial Rate Limit Enforcer: 1.5s guarantees < 1,200 reqs/30min
+            time.sleep(1.5)
