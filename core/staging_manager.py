@@ -217,12 +217,23 @@ class StagingManager:
             self.staging_logger.info(f"Level 4 Profit: Day {total}/15, Win Rate={win_rate:.1f}%, Net PnL=₹{net:.2f}")
             
             if total >= 15:
-                if win_rate >= 55 and net > 0:
+                # Latency and slippage quality gates
+                avg_latency = self._get_avg_execution_latency()
+                avg_slippage = self._get_avg_slippage_pct()
+                latency_ok = avg_latency < 250  # ms
+                slippage_ok = avg_slippage < 1.0  # percent
+                
+                if win_rate >= 55 and net > 0 and latency_ok and slippage_ok:
                     self.state["current_level"] = 5
                     self.staging_logger.info("🎓 LEVEL UP → Level 5 (GRADUATION! Manual UPSTOX unlock available)")
                     level_up = True
                 else:
-                    self.staging_logger.warning(f"Level 4 FAILED after 15 days: WR={win_rate:.1f}%, PnL=₹{net:.2f}. Resetting.")
+                    reasons = []
+                    if win_rate < 55: reasons.append(f"WR={win_rate:.1f}%<55%")
+                    if net <= 0: reasons.append(f"PnL=₹{net:.2f}≤0")
+                    if not latency_ok: reasons.append(f"Latency {avg_latency:.0f}ms>250ms")
+                    if not slippage_ok: reasons.append(f"Slippage {avg_slippage:.2f}%>1%")
+                    self.staging_logger.warning(f"Level 4 FAILED after 15 days: {', '.join(reasons)}. Resetting.")
                     self.state["level_4_start_date"] = today_str
                     self.state["level_4_wins"] = 0
                     self.state["level_4_total"] = 0
@@ -233,3 +244,38 @@ class StagingManager:
         self.state["last_processed_date"] = today_str
         self.save_staging_state()
         return level_up
+
+    # ----- Quality Gate Helpers -----
+
+    def _get_avg_execution_latency(self) -> float:
+        """Reads OMS execution_metrics.csv and returns average total_latency_ms over last 15 days."""
+        try:
+            import pandas as _pd
+            csv_path = os.path.join("reports", "execution_metrics.csv")
+            if not os.path.exists(csv_path):
+                return 0.0
+            df = _pd.read_csv(csv_path)
+            if df.empty or "total_latency_ms" not in df.columns:
+                return 0.0
+            # Last 15 days of data
+            return float(df["total_latency_ms"].tail(100).mean())
+        except Exception as e:
+            logger.debug(f"Could not compute avg latency: {e}")
+            return 0.0
+
+    def _get_avg_slippage_pct(self) -> float:
+        """Calculates average slippage percentage from SL exit records."""
+        try:
+            # Aggregate slippage from today_metrics over recent evaluations
+            sl_exits = self.state.get("today_metrics", {}).get("sl_exits", [])
+            if not sl_exits:
+                return 0.0
+            slippages = []
+            for sl in sl_exits:
+                trigger = sl.get("trigger", 0)
+                if trigger > 0:
+                    slippages.append(abs(sl.get("slippage", 0)) / trigger * 100)
+            return sum(slippages) / len(slippages) if slippages else 0.0
+        except Exception as e:
+            logger.debug(f"Could not compute avg slippage: {e}")
+            return 0.0

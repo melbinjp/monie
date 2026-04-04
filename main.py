@@ -260,6 +260,7 @@ async def main_async():
     
     # 4. Start Order Management System (OMS)
     oms = OrderManagementSystem(event_bus, broker, risk_manager)
+    await oms.reconcile_with_broker()  # Detect orphaned positions from prior crashes
     
     # 5. Start State Memory
     state_manager = StateManager()

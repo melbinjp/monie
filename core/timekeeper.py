@@ -14,7 +14,8 @@ logger = get_logger(__name__)
 class TimeKeeper:
     """
     Singleton-like time source for the entire bot.
-    Syncs with NTP on boot, then applies drift offset to all time queries.
+    Syncs with NTP on boot, then re-syncs every 4 hours to prevent drift
+    on long-running EC2 instances.
     
     Usage:
         from core.timekeeper import timekeeper
@@ -24,29 +25,36 @@ class TimeKeeper:
     def __init__(self):
         self._drift_ms = 0.0  # milliseconds ahead/behind NTP
         self._synced = False
-        self._sync()
+        self._resync_interval = 4 * 3600  # 4 hours
+        self._start_sync_loop()
 
-    def _sync(self):
-        """Attempt NTP sync in background to avoid blocking startup."""
-        def _do_sync():
-            try:
-                import ntplib
-                client = ntplib.NTPClient()
-                response = client.request('pool.ntp.org', version=3, timeout=5)
-                self._drift_ms = response.offset * 1000  # seconds → ms
-                self._synced = True
-                logger.info(
-                    f"⏱️ TimeKeeper: NTP synced. Local clock drift: {self._drift_ms:+.1f}ms"
-                )
-            except ImportError:
-                logger.warning("⏱️ TimeKeeper: ntplib not installed. Using local clock (pip install ntplib).")
-                self._synced = False
-            except Exception as e:
-                logger.warning(f"⏱️ TimeKeeper: NTP sync failed ({e}). Using local clock.")
-                self._synced = False
-
-        t = threading.Thread(target=_do_sync, daemon=True)
+    def _start_sync_loop(self):
+        """Runs NTP sync on boot and every 4 hours thereafter."""
+        def _loop():
+            while True:
+                self._do_sync()
+                time.sleep(self._resync_interval)
+        
+        t = threading.Thread(target=_loop, daemon=True)
         t.start()
+
+    def _do_sync(self):
+        """Single NTP sync attempt."""
+        try:
+            import ntplib
+            client = ntplib.NTPClient()
+            response = client.request('pool.ntp.org', version=3, timeout=5)
+            self._drift_ms = response.offset * 1000  # seconds → ms
+            self._synced = True
+            logger.info(
+                f"⏱️ TimeKeeper: NTP synced. Local clock drift: {self._drift_ms:+.1f}ms"
+            )
+        except ImportError:
+            logger.warning("⏱️ TimeKeeper: ntplib not installed. Using local clock (pip install ntplib).")
+            self._synced = False
+        except Exception as e:
+            logger.warning(f"⏱️ TimeKeeper: NTP sync failed ({e}). Using local clock.")
+            self._synced = False
 
     def now(self) -> datetime.datetime:
         """Returns drift-corrected current datetime."""

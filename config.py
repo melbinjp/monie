@@ -26,6 +26,10 @@ class Config:
     UPSTOX_REDIRECT_URI = os.getenv("UPSTOX_REDIRECT_URI")
     UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN") # For manual token entry
     
+    # Algo Trading Compliance (SEBI April 2026 mandates)
+    UPSTOX_ALGO_NAME = os.getenv("UPSTOX_ALGO_NAME", "dopy")  # Must match "My Apps" name in Upstox dashboard
+    UPSTOX_ALGO_ID = os.getenv("UPSTOX_ALGO_ID")               # Only for registered >10 OPS algos
+    
     # Risk Management
     CAPITAL = float(os.getenv("CAPITAL", "50000"))  # Trading Capital
     MAX_DAILY_LOSS_PCT = 0.02  # 2% of Capital

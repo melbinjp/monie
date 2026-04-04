@@ -180,3 +180,21 @@ class MultiOrderRateLimiter(RateLimiter):
             per_minute=40,
             per_30_min=2000,  # Same 30-min global cap applies
         )
+
+
+class RetailRateLimiter(RateLimiter):
+    """
+    SEBI April 2026: Retail algo rate limiter.
+    Enforces 10 OPS threshold — exceeding this triggers mandatory
+    exchange algo registration (Annexure 7 audit, CISA cert, etc.).
+    
+    Use this as default. Switch to base RateLimiter (50 OPS) only
+    after completing formal exchange registration and obtaining an Algo ID.
+    """
+
+    def __init__(self):
+        super().__init__(
+            per_second=10,    # SEBI retail threshold
+            per_minute=500,   # Upstox global limit (unchanged)
+            per_30_min=2000,  # Upstox global limit (unchanged)
+        )

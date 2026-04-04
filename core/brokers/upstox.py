@@ -3,10 +3,11 @@ from upstox_client.rest import ApiException
 from core.brokers.base_broker import BaseBroker
 from core.logger import get_logger
 from core.data_sanitizer import DataSanitizer
-from core.rate_limiter import RateLimiter
+from core.rate_limiter import RateLimiter, RetailRateLimiter
 import pandas as pd
 import datetime
 import threading
+import urllib.request
 
 logger = get_logger(__name__)
 
@@ -24,7 +25,15 @@ class UpstoxBroker(BaseBroker):
         self.is_logged_in = False
         self.ws_client = None
         self.sanitizer = DataSanitizer(event_bus=self.event_bus)  # Primitive 2: Clean all quotes
-        self.rate_limiter = RateLimiter()  # Upstox API rate limit enforcement
+        
+        # SEBI April 2026: Default to 10 OPS retail cap unless registered algo
+        algo_id = getattr(config, 'UPSTOX_ALGO_ID', None)
+        if algo_id:
+            self.rate_limiter = RateLimiter()  # 50 OPS for registered algos
+            logger.info(f"⚡ Registered Algo Mode: 50 OPS (Algo ID: {algo_id})")
+        else:
+            self.rate_limiter = RetailRateLimiter()  # 10 OPS retail cap
+            logger.info("🛡️ Retail Mode: 10 OPS limit (no UPSTOX_ALGO_ID set)")
         
         # REST Polling Fallback Architecture
         self._active_subscriptions = set()
@@ -34,19 +43,39 @@ class UpstoxBroker(BaseBroker):
     def authenticate(self):
         try:
             if hasattr(self.config, 'UPSTOX_ACCESS_TOKEN') and self.config.UPSTOX_ACCESS_TOKEN:
-                configuration = upstox_client.Configuration()
-                configuration.access_token = self.config.UPSTOX_ACCESS_TOKEN
-                api_client = upstox_client.ApiClient(configuration)
+                # --- Standard client for quotes, positions, options, charges ---
+                std_config = upstox_client.Configuration()
+                std_config.access_token = self.config.UPSTOX_ACCESS_TOKEN
+                std_client = upstox_client.ApiClient(std_config)
                 
-                # Reuse a SINGLE ApiClient for all API instances (performance)
-                self.api_instance = upstox_client.OrderApi(api_client)
-                self.quote_instance = upstox_client.MarketQuoteApi(api_client)
-                self.portfolio_api = upstox_client.PortfolioApi(api_client)
-                self.options_api = upstox_client.OptionsApi(api_client)
-                self.charge_api = upstox_client.ChargeApi(api_client)
+                # --- HFT client for order operations (lower latency) ---
+                hft_config = upstox_client.Configuration()
+                hft_config.access_token = self.config.UPSTOX_ACCESS_TOKEN
+                hft_config.host = "https://api-hft.upstox.com"  # SEBI 2026: HFT endpoint for orders
+                hft_client = upstox_client.ApiClient(hft_config)
                 
+                # Inject X-Algo-Name header for regulatory compliance
+                algo_name = getattr(self.config, 'UPSTOX_ALGO_NAME', None)
+                if algo_name:
+                    hft_client.default_headers['X-Algo-Name'] = algo_name
+                    std_client.default_headers['X-Algo-Name'] = algo_name
+                    logger.info(f"📋 Algo Header Set: X-Algo-Name = {algo_name}")
+                else:
+                    logger.warning("⚠️ UPSTOX_ALGO_NAME not set — orders may be rejected from Algo Apps")
+                
+                # Order API on HFT, everything else on standard
+                self.api_instance = upstox_client.OrderApi(hft_client)
+                self.quote_instance = upstox_client.MarketQuoteApi(std_client)
+                self.portfolio_api = upstox_client.PortfolioApi(std_client)
+                self.options_api = upstox_client.OptionsApi(std_client)
+                self.charge_api = upstox_client.ChargeApi(std_client)
+                
+                self.access_token = self.config.UPSTOX_ACCESS_TOKEN
                 self.is_logged_in = True
-                logger.info("✅ Upstox Client Initialized (Using Provided Access Token)")
+                logger.info("✅ Upstox Client Initialized (Dual-Client: HFT Orders + Standard Data)")
+                
+                # Verify public IP for Static IP compliance
+                self._verify_static_ip()
                 
                 # Also hot-reload the WebSocket token if the background thread is running
                 if hasattr(self, 'ws_client') and self.ws_client:
@@ -60,6 +89,14 @@ class UpstoxBroker(BaseBroker):
         except Exception as e:
             logger.error(f"Upstox Auth Error: {e}")
             return False
+
+    def _verify_static_ip(self):
+        """Logs the bot's public IP on startup for SEBI Static IP compliance verification."""
+        try:
+            public_ip = urllib.request.urlopen('https://api.ipify.org', timeout=5).read().decode()
+            logger.info(f"🌐 Public IP: {public_ip} — Verify this matches your Upstox registered Static IP")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not determine public IP: {e}")
 
     def start_websocket(self, on_error_callback=None):
         if not getattr(self.config, 'USE_WEBSOCKET', False):
@@ -102,7 +139,8 @@ class UpstoxBroker(BaseBroker):
         # Primitive 4: Idempotent order tag
         order_tag = self.generate_order_tag("UPSTOX", symbol, side)
         
-        body = upstox_client.PlaceOrderRequest(
+        # Build order request with SEBI Market Protection mandate
+        order_params = dict(
             quantity=int(quantity),
             product='I',
             validity='DAY',
@@ -113,8 +151,13 @@ class UpstoxBroker(BaseBroker):
             transaction_type=txn_type,
             disclosed_quantity=0,
             trigger_price=0.0,
-            is_amo=False
+            is_amo=False,
         )
+        # SEBI April 2026: Market Protection for MARKET and SL-M orders
+        if order_type in ("MARKET", "SL-M"):
+            order_params['market_protection'] = -1  # Auto protection per exchange guidelines
+        
+        body = upstox_client.PlaceOrderRequest(**order_params)
         
         # Retry with exponential backoff (3 attempts: 1s, 2s, 4s)
         import time as _time

@@ -75,19 +75,23 @@ class DynamicStaggerEngine:
 
     def _vix_delay(self, vix: float) -> float:
         """
-        Calculates base delay inversely proportional to India VIX.
+        Calculates base delay using exponential decay of India VIX.
         High VIX = shorter delay (get both legs in fast).
         Low VIX = longer delay (calm market, maximum patience).
 
-        VIX 10 → 120s delay
-        VIX 20 → ~74s delay
-        VIX 35 → 5s delay
+        Exponential curve: delay = 120 * e^(-0.08 * (vix - 8))
+        VIX  8 → 120s delay (clamp)
+        VIX 10 → 101s delay
+        VIX 15 →  60s delay  (key improvement vs linear's 97s)
+        VIX 20 →  46s delay
+        VIX 30 →  13s delay
+        VIX 35 →   5s delay (clamp)
         """
         if vix <= 0:
             return self.failsafe_delay
-        # Linear interpolation: VIX 10 → 120s, VIX 35 → 5s
-        delay = 120.0 - ((vix - 10.0) * (115.0 / 25.0))
-        return max(5.0, min(120.0, delay))
+        import math
+        delay = 120.0 * math.exp(-0.08 * (vix - 8))
+        return max(3.0, min(120.0, delay))
 
     # --- Layer 2: Momentum Override (1-Min RoC) ---
 

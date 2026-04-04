@@ -43,6 +43,20 @@ class OrderManagementSystem:
         # Subscribe to OrderEvents
         self.bus.subscribe(OrderEvent, self.on_order_event)
 
+    async def reconcile_with_broker(self):
+        """Boot-time scan: detects orphaned positions from previous session crashes."""
+        try:
+            loop = asyncio.get_running_loop()
+            broker_positions = await loop.run_in_executor(None, self.broker.get_positions)
+            if broker_positions:
+                logger.info(f"🔍 OMS Reconciliation: Found {len(broker_positions)} open positions at broker")
+                for sym, details in broker_positions.items():
+                    logger.info(f"   📋 {sym}: qty={details.get('qty', '?')}, avg=₹{details.get('avg_price', 0):.2f}")
+            else:
+                logger.info("✅ OMS Reconciliation: No open positions at broker. Clean slate.")
+        except Exception as e:
+            logger.warning(f"OMS Reconciliation error (non-fatal): {e}")
+
     async def on_order_event(self, event: OrderEvent):
         """Standardizes interception of any strategy trying to place an order."""
         logger.info(f"OMS Received OrderEvent: {event.side} {event.qty}x {event.symbol} [{event.order_tag}]")

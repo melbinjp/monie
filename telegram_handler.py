@@ -255,8 +255,13 @@ class TelegramHandler:
             if not updated:
                 lines.append(f"\nUPSTOX_ACCESS_TOKEN={new_token}\n")
             
-            with open(env_path, 'w') as file:
-                file.writelines(lines)
+            # Atomic write: temp file → os.replace() (prevents corruption on crash)
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', dir=os.path.dirname(env_path),
+                                              delete=False, suffix='.env.tmp') as tmp:
+                tmp.writelines(lines)
+                tmp_path = tmp.name
+            os.replace(tmp_path, env_path)
             
             # 2. Update in-memory Config
             Config.UPSTOX_ACCESS_TOKEN = new_token
@@ -334,14 +339,16 @@ class TelegramHandler:
             stats = self.event_bus.get_stats()
             status_msg += f"🔄 EventBus: {stats['events_processed']:,} processed, {stats['events_dropped']} dropped\n\n"
         
-        # Active trade legs
-        if os.path.exists("bot_state.json"):
-            try:
-                with open("bot_state.json", 'r') as f:
-                    state = json.load(f)
-                if state.get("traded_today"):
+        # Active trade legs — read from SQLite StateManager (not legacy JSON)
+        try:
+            from core.state_manager import StateManager
+            sm = StateManager()
+            traded = sm.state.get("traded_today", False)
+            if traded:
+                today_str = str(datetime.datetime.now().date())
+                if sm.state.get("last_trade_date") == today_str:
                     status_msg += "✅ **Trades:** Executed Today\n\n**Live Legs:**\n"
-                    legs = state.get("active_legs", {})
+                    legs = sm.state.get("active_legs", {})
                     active_count = 0
                     for key, leg in legs.items():
                         if leg and isinstance(leg, dict) and leg.get("active"):
@@ -351,10 +358,10 @@ class TelegramHandler:
                         status_msg += "All positions have hit Stop Loss or Liquidation!"
                 else:
                     status_msg += "⏳ **Trades:** Waiting for signal or schedule...\n"
-            except Exception:
-                status_msg += "⚠️ Could not read state.\n"
-        else:
-            status_msg += "⏳ **Trades:** No state file (waiting for trades).\n"
+            else:
+                status_msg += "⏳ **Trades:** Waiting for signal or schedule...\n"
+        except Exception:
+            status_msg += "⚠️ Could not read state.\n"
         self.send_message(status_msg)
 
     def start(self):

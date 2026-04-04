@@ -532,7 +532,7 @@ class IntradayShortStraddle(BaseStrategy):
                 
                 # Tier 3: +30% decay → hyper-aggressive trailing
                 if profit_pct >= 0.30:
-                    gap_pct = max(0.05, 0.15 - ((profit_pct - 0.30) * 0.1))
+                    gap_pct = max(0.03, 0.15 - ((profit_pct - 0.30) * 0.3))
                     new_sl = ltp + (leg['entry_price'] * gap_pct)
                     if new_sl < leg['sl_price']:
                         leg['sl_price'] = new_sl
@@ -574,8 +574,10 @@ class IntradayShortStraddle(BaseStrategy):
             
             if self.staging_manager: self.staging_manager.record_sl_exit(self.ce_leg['sl_price'], ltp)
             
-            # BREAKOUT OFFENSE — half size, tighter SL
-            bo_qty = max(50, (self.ce_leg['qty'] // 2) // 50 * 50)  # 50% qty, rounded to lot
+            # BREAKOUT OFFENSE — half size, tighter SL (lot_size=25 for NIFTY)
+            lot_size = 25
+            half_qty = self.ce_leg['qty'] // 2
+            bo_qty = max(lot_size, (half_qty // lot_size) * lot_size)
             bo_tag = self.broker.generate_order_tag(self.get_name(), self.ce_leg['symbol'], "BUY", "Breakout")
             self.pending_orders.add(bo_tag)
             self.event_bus.publish(OrderEvent(order_tag=bo_tag, strategy_id=self.get_name(), symbol=self.ce_leg['symbol'], qty=bo_qty, side="BUY"))
@@ -607,8 +609,10 @@ class IntradayShortStraddle(BaseStrategy):
             
             if self.staging_manager: self.staging_manager.record_sl_exit(self.pe_leg['sl_price'], ltp)
             
-            # BREAKOUT OFFENSE — half size, tighter SL
-            bo_qty = max(50, (self.pe_leg['qty'] // 2) // 50 * 50)  # 50% qty, rounded to lot
+            # BREAKOUT OFFENSE — half size, tighter SL (lot_size=25 for NIFTY)
+            lot_size = 25
+            half_qty = self.pe_leg['qty'] // 2
+            bo_qty = max(lot_size, (half_qty // lot_size) * lot_size)
             bo_tag = self.broker.generate_order_tag(self.get_name(), self.pe_leg['symbol'], "BUY", "Breakout")
             self.pending_orders.add(bo_tag)
             self.event_bus.publish(OrderEvent(order_tag=bo_tag, strategy_id=self.get_name(), symbol=self.pe_leg['symbol'], qty=bo_qty, side="BUY"))
@@ -677,7 +681,10 @@ class IntradayShortStraddle(BaseStrategy):
         if self.pe_leg: total_premium += self.pe_leg['entry_price'] * self.pe_leg.get('qty', 50)
         
         profit_pct = (total_profit / total_premium * 100) if total_premium > 0 else 0
-        if total_profit > 500 and profit_pct > 30:
+        # Capital-scaled threshold: 0.5% of capital (instead of fixed ₹500)
+        capital = getattr(self.risk_manager, 'capital', 50000.0)
+        profit_threshold = max(250, capital * 0.005)  # Min ₹250 floor for small accounts
+        if total_profit > profit_threshold and profit_pct > 30:
             msg = f"🎯 THETA EXIT (2PM): True Net PnL is +₹{total_profit:.0f} ({profit_pct:.1f}% max decay). Closing early."
             if self.telegram: self.telegram.send_message(msg)
             self.square_off_all()

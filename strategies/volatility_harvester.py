@@ -88,8 +88,12 @@ class VolatilityHarvester(BaseStrategy):
         vix = self.current_vix
         if vix < 18 or vix > 30: return
 
-        otm_distance = int(50 * round((vix * 10) / 50))  # VIX 20 → 200pt OTM, VIX 25 → 250pt
-        otm_distance = max(200, min(400, otm_distance))
+        # Statistically correct OTM distance: 1.3σ (ensures >90% OTM expiry probability)
+        # 1σ daily move = Nifty * VIX / sqrt(252) / 100
+        import math
+        sigma_1 = nifty_ltp * (vix / 100) / math.sqrt(252)
+        otm_distance = int(math.ceil(1.3 * sigma_1 / 50) * 50)  # Round up to nearest 50
+        otm_distance = max(250, min(500, otm_distance))  # Safety clamp
 
         step = 50
         atm_strike = step * round(nifty_ltp / step)
