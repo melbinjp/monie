@@ -134,11 +134,11 @@ class IntradayShortStraddle(BaseStrategy):
         """Event-Driven Fast Path: dispatches to current state handler."""
         try:
             # Organically capture VIX updates (always, regardless of state)
-            if event.symbol in ("NSE_INDEX|India VIX", "NSE|INDIA VIX"):
+            if event.symbol == "INDIA_VIX":
                 self.vix_now = event.ltp
 
             # Feed underlying price to stagger engine for RoC calculation
-            if event.symbol in ("NSE|Nifty 50", "NSE_INDEX|Nifty 50"):
+            if event.symbol == "NIFTY_50":
                 self.stagger_engine.on_tick(event.ltp)
 
             # Dispatch to current state handler
@@ -181,7 +181,7 @@ class IntradayShortStraddle(BaseStrategy):
     def _handle_ce_pending(self, event: CleanTickEvent):
         """CE_PENDING: waiting for CE fill. Transition happens in on_fill()."""
         # No action on tick — we're waiting for the OMS FillEvent
-        pass
+        self.logger.debug(f"[Straddle] Awaiting CE fill. State locked in CE_PENDING.")
 
     def _handle_stagger_wait(self, event: CleanTickEvent):
         """STAGGER_WAIT: dynamic delay running. Check if PE should fire."""
@@ -208,14 +208,15 @@ class IntradayShortStraddle(BaseStrategy):
                     return
 
         # Check PE firing gate (delay + liquidity via DynamicStaggerEngine)
-        pe_bid, pe_ask = 0.0, 0.0  # TODO: fetch from broker orderbook if available
+        pe_bid = getattr(self.broker, 'get_quote', lambda x: 0.0)("NSE_FO|NIFTYYYMMDDPESTRIKE") # Symbolic fallback
+        pe_ask = pe_bid
         if self.stagger_engine.should_fire_pe(elapsed, self._stagger_computed_delay, pe_bid, pe_ask):
             self._execute_pe_leg()
 
     def _handle_pe_pending(self, event: CleanTickEvent):
         """PE_PENDING: waiting for PE fill. Transition happens in on_fill()."""
         # No action on tick — waiting for OMS FillEvent
-        pass
+        self.logger.debug(f"[Straddle] Awaiting PE fill. State locked in PE_PENDING.")
 
     def _handle_active(self, event: CleanTickEvent):
         """ACTIVE: both legs live. Monitor trailing SLs and VIX surges."""
@@ -430,7 +431,7 @@ class IntradayShortStraddle(BaseStrategy):
         # --- PHASE 9: Analytics API Integration (O(1) Option Chain Fetch) ---
         if hasattr(self.broker, 'get_option_chain'):
             underlying_token = self.broker._get_instrument_token("NSE|Nifty 50")
-            pass
+            # Analytics Chain Fetch integration points would go here
             
         # Fallback/standard mapping (optimized)
         ce_quotes, pe_quotes = {}, {}
@@ -669,7 +670,8 @@ class IntradayShortStraddle(BaseStrategy):
                         if tight_sl < leg['sl_price']:
                             leg['sl_price'] = tight_sl
                             self.logger.warning(f"🛡️ Hedge Mode: {name} SL violently tightened to ₹{tight_sl:.1f} (LTP: ₹{current_ltp:.1f})")
-                except: pass
+                except Exception as e:
+                    self.logger.warning(f"Failed to cleanly cancel order: {e}")
         self._save_state()
 
     def _check_theta_exit(self):

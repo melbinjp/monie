@@ -197,7 +197,15 @@ class UpstoxWebSocketClient:
                     
                 if ltp > 0:
                     self.price_cache[instrument_key] = ltp
-                    tick = TickEvent(symbol=instrument_key, ltp=ltp, timestamp=time.time())
+                    
+                    # Agnostic Translation Layer: Convert Upstox string into standardized Internal Symbol
+                    routing_sym = instrument_key
+                    if instrument_key in ("NSE_INDEX|India VIX", "NSE|INDIA VIX"):
+                        routing_sym = "INDIA_VIX"
+                    elif instrument_key in ("NSE_INDEX|Nifty 50", "NSE|Nifty 50"):
+                        routing_sym = "NIFTY_50"
+                        
+                    tick = TickEvent(symbol=routing_sym, ltp=ltp, timestamp=time.time())
                     self.event_bus.publish(tick)
         except Exception as e:
             logger.debug(f"V3 message decode error: {e}")

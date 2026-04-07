@@ -61,11 +61,11 @@ class AfternoonMomentumScalper(BaseStrategy):
     def on_tick(self, event: CleanTickEvent):
         """Reactive engine triggered by raw market ticks."""
         try:
-            if event.symbol in ("NSE_INDEX|India VIX", "NSE|INDIA VIX"):
+            if event.symbol == "INDIA_VIX":
                 self.vix_now = event.ltp
 
             # We strictly track NIFTY 50 for breakouts
-            if event.symbol == "NSE|Nifty 50" or event.symbol == "NSE_INDEX|Nifty 50":
+            if event.symbol == "NIFTY_50":
                 now = datetime.datetime.now().time()
 
                 # Phase 1: Range Building (12:30 - 13:30)
@@ -207,7 +207,8 @@ class AfternoonMomentumScalper(BaseStrategy):
                         self.trailing_sl = tight_sl
                         logger.warning(f"🛡️ Hedge Mode: {self.position} (Long) SL violently raised to ₹{tight_sl:.1f} (LTP: ₹{current_ltp:.1f})")
                         if self.state_manager: self._save_state()
-            except: pass
+            except Exception as e:
+                logger.warning(f"Error during momentum SL update logic: {e}")
 
     def square_off_all(self, reason_msg=None):
         if self.position is not None and self.target_symbol:

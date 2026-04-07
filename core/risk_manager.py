@@ -108,16 +108,7 @@ class RiskManager:
              
         # 0. Hedge Mode check (Block Entries, Allow Exits)
         if self.in_hedge_mode:
-            # We assume order_tags with 'EXIT', 'Abort', or 'SquareOff' are exits, 
-            # and generic ones are entries. Since Monie uses tags heavily.
-            is_exit = False
-            if event.order_tag and ("EXIT" in event.order_tag.upper() or "ABORT" in event.order_tag.upper()):
-                is_exit = True
-            # Also if it's BUYing to close a SELL position, roughly guessing by open exposure
-            if not is_exit and event.side == "BUY" and self._open_exposure > 0:
-                is_exit = True  # Loose heuristic for exiting shorts
-                
-            if not is_exit:
+            if not getattr(event, 'is_exit', False):
                 return False, "🛑 HEDGE MODE ACTIVE: New entries are suspended due to structural volatility."
         
         # 1. Fat-finger qty check
@@ -163,19 +154,29 @@ class RiskManager:
             reduction = qty * price
             self._open_exposure = max(0.0, self._open_exposure - reduction)
     
-    def calculate_trailing_stop(self, entry_price, current_price, current_sl):
+    def calculate_trailing_stop(self, entry_price, current_price, current_sl, position_type="BUY"):
         """
-        Trailing Stop Logic:
+        Trailing Stop Logic (Fixed reverse math for SHORT positions).
         - If profit > 1%, move SL to Breakeven
         - If profit > 2%, move SL to +1%
         """
-        pnl_pct = (current_price - entry_price) / entry_price
-        
-        if pnl_pct >= 0.01 and current_sl < entry_price:
-            return entry_price
+        if position_type == "BUY":
+            pnl_pct = (current_price - entry_price) / entry_price
             
-        target_sl = entry_price * 1.01
-        if pnl_pct >= 0.02 and current_sl < target_sl:
-            return target_sl
+            if pnl_pct >= 0.01 and current_sl < entry_price:
+                return entry_price
+                
+            target_sl = entry_price * 1.01
+            if pnl_pct >= 0.02 and current_sl < target_sl:
+                return target_sl
+        else: # SELL
+            pnl_pct = (entry_price - current_price) / entry_price
             
+            if pnl_pct >= 0.01 and current_sl > entry_price:
+                return entry_price
+                
+            target_sl = entry_price * 0.99
+            if pnl_pct >= 0.02 and current_sl > target_sl:
+                return target_sl
+                
         return current_sl

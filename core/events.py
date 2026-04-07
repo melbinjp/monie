@@ -46,6 +46,7 @@ class OrderEvent(Event):
     side: str = ""           # "BUY" or "SELL"
     order_type: str = "MARKET"
     price: float = 0.0
+    is_exit: bool = False
 
 @dataclass(frozen=True)
 class FillEvent(Event):

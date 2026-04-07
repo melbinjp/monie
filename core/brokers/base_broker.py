@@ -49,3 +49,8 @@ class BaseBroker(ABC):
     def get_pnl(self):
         """Returns total PnL for the day."""
         pass
+
+    @abstractmethod
+    def get_cached_quote(self, symbol: str) -> float:
+        """Returns non-blocking cached Last Traded Price natively without REST delays."""
+        pass

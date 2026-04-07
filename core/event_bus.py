@@ -36,13 +36,19 @@ class EventBus:
         self.subscribers[event_type].append(handler)
         logger.debug(f"Subscribed {getattr(handler, '__name__', repr(handler))} to {event_type.__name__}")
 
-    def publish(self, event: Event):
-        """Pushes an event into the bus (non-blocking)."""
+    def _safe_put(self, event):
         try:
             self.queue.put_nowait(event)
         except asyncio.QueueFull:
             self.events_dropped += 1
-            logger.error(f"EventBus queue FULL ({self.queue.maxsize})! Dropped {type(event).__name__}. Total dropped: {self.events_dropped}")
+            logger.error(f"EventBus queue FULL! Dropped {type(event).__name__}")
+
+    def publish(self, event: Event):
+        """Pushes an event into the bus (thread-safe, zero-lag)."""
+        if hasattr(self, '_loop') and self._loop and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(self._safe_put, event)
+        else:
+            self._safe_put(event)
 
     async def _process_events(self):
         """Background loop that pulls events and dispatches them in parallel."""
@@ -92,13 +98,17 @@ class EventBus:
                 )
                 tasks.append(task)
 
-        if tasks:
-            # return_exceptions=True ensures one failure doesn't cancel the rest
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    h_name = getattr(handlers[i], '__name__', repr(handlers[i]))
-                    logger.error(f"Handler {h_name} raised during gather: {result}")
+        for i, task in enumerate(tasks):
+            h_name = getattr(handlers[i], '__name__', repr(handlers[i]))
+            task.set_name(h_name)
+            task.add_done_callback(self._task_done_callback)
+
+    def _task_done_callback(self, t: asyncio.Task):
+        try:
+            if t.exception():
+                logger.error(f"Handler {t.get_name()} raised: {t.exception()}")
+        except asyncio.CancelledError:
+            pass
 
     async def _run_async_handler(self, handler, handler_name: str, event, event_type):
         """Runs an async handler with semaphore bounding and latency tracking."""
@@ -141,6 +151,7 @@ class EventBus:
 
     def start(self):
         """Starts the event processing loop."""
+        self._loop = asyncio.get_running_loop()
         if not self._task:
             self._task = asyncio.create_task(self._process_events())
 

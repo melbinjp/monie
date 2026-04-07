@@ -80,6 +80,9 @@ class UpstoxBroker(BaseBroker):
                 # Also hot-reload the WebSocket token if the background thread is running
                 if hasattr(self, 'ws_client') and self.ws_client:
                     self.ws_client.access_token = self.config.UPSTOX_ACCESS_TOKEN
+                    self.ws_client.stop()
+                    import threading
+                    threading.Thread(target=self.ws_client.start, daemon=True).start()
                     
                 return True
             else:
@@ -97,6 +100,18 @@ class UpstoxBroker(BaseBroker):
             logger.info(f"🌐 Public IP: {public_ip} — Verify this matches your Upstox registered Static IP")
         except Exception as e:
             logger.warning(f"⚠️ Could not determine public IP: {e}")
+
+    def get_cached_quote(self, symbol: str) -> float:
+        """Fully non-blocking cache retrieval mapping internal to Upstox specifics."""
+        internal_sym = symbol
+        if "VIX" in symbol.upper():
+             internal_sym = "NSE_INDEX|India VIX"
+        elif "NIFTY_50" in symbol.upper():
+             internal_sym = "NSE_INDEX|Nifty 50"
+             
+        if hasattr(self, 'ws_client') and self.ws_client:
+            return self.ws_client.get_cached_price(internal_sym)
+        return 0.0
 
     def start_websocket(self, on_error_callback=None):
         if not getattr(self.config, 'USE_WEBSOCKET', False):

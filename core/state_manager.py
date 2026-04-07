@@ -69,11 +69,20 @@ class StateManager:
         self._save_atomic()
     
     def _save_atomic(self):
+        class TypeSafeEncoder(json.JSONEncoder):
+            def default(self, obj):
+                import datetime, decimal
+                if isinstance(obj, (datetime.datetime, datetime.date)):
+                    return obj.isoformat()
+                if isinstance(obj, decimal.Decimal):
+                    return float(obj)
+                return super().default(obj)
+                
         try:
             with sqlite3.connect(self.filename) as conn:
                 conn.execute(
                     "REPLACE INTO kv_store (key, value) VALUES (?, ?)", 
-                    ('global_state', json.dumps(self.state, default=str))
+                    ('global_state', json.dumps(self.state, cls=TypeSafeEncoder))
                 )
         except Exception as e:
             logger.critical(f"CRITICAL: SQLite Memory Save Failed: {e}")

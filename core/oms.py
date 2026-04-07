@@ -231,3 +231,44 @@ class OrderManagementSystem:
                 df.to_csv(csv_path, mode='a', header=False, index=False)
         except Exception as e:
             logger.error(f"Failed to write execution metric for {fill.order_tag}: {e}")
+
+    def rebuild_state(self):
+        """
+        Primitive 5 (Integrity): Independently queries the physical broker array
+        and synthesizes SYSTEM_RECOVERY FillEvents to rebuild strategy memories
+        that were wiped out during a server crash.
+        """
+        logger.info("OMS Bootstrapping Crash Recovery Protocol...")
+        try:
+            positions = self.broker.get_positions()
+            if not positions:
+                logger.info("OMS Recovery: No live exposure found on Broker. Clean slate.")
+                return
+
+            logger.warning(f"OMS Recovery: Found {len(positions)} active or orphaned positions. Broadcasting synthetic events.")
+            for pos in positions:
+                # E.g., Upstox might return positive qty for LONG, negative for SHORT
+                net_qty = pos.get("net_quantity", 0)
+                if net_qty == 0: continue
+                
+                side = "BUY" if net_qty > 0 else "SELL"
+                abs_qty = abs(net_qty)
+                sym = pos.get("tradingsymbol", "UNKNOWN")
+                
+                # We synthesize an idempotent tag showing it's a SYSTEM RECOVERY event
+                synth_tag = f"MONIE-RECOVERY-{sym}-{int(time.time()*1000)}"
+                
+                synth_fill = FillEvent(
+                    order_id="BROKER_RECOVERY",
+                    order_tag=synth_tag,
+                    symbol=sym,
+                    fill_qty=abs_qty,
+                    fill_price=float(pos.get("average_price", 0.0)),
+                    side=side,
+                    commission=0.0
+                )
+                self.bus.publish(synth_fill)
+                
+            logger.info("OMS Recovery Broadcasting Complete. Strategies should now have aligned state.")
+        except Exception as e:
+            logger.error(f"OMS Crash Recovery failed: {e}. Bot is operating completely blind!")

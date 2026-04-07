@@ -54,7 +54,7 @@ class ThetaCrusher(BaseStrategy):
         """Reactive evaluation triggered by market ticks."""
         try:
             # Organic VIX tracking
-            if event.symbol in ("NSE_INDEX|India VIX", "NSE|INDIA VIX"):
+            if event.symbol == "INDIA_VIX":
                 self.current_vix = event.ltp
             
             now = datetime.datetime.now().time()

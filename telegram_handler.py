@@ -40,37 +40,63 @@ class TelegramHandler:
         self.risk_manager = risk_manager
         self.broker = broker
 
-    def send_message(self, message):
+    def send_message(self, message, reply_markup=None):
         """Asynchronously queues a message to the user."""
         if not self.base_url or not self.chat_id:
             return
-        self.msg_queue.put(message)
+        self.msg_queue.put(('text', message, reply_markup))
+
+    def send_document(self, filename, caption=None):
+        """Asynchronously queues a document upload to the user."""
+        if not self.base_url or not self.chat_id:
+            return
+        self.msg_queue.put(('document', filename, caption))
+
+    def answer_callback_query(self, callback_id):
+        """Acknowledges a callback query instantly."""
+        if not self.base_url: return
+        url = f"{self.base_url}/answerCallbackQuery"
+        try:
+            requests.post(url, json={"callback_query_id": callback_id}, timeout=5)
+        except Exception as e:
+            logger.error(f"Callback answer error: {e}")
 
     def _message_dispatcher(self):
         """Background thread that sends queued messages over the network."""
         while self.running:
             try:
-                raw_msg = self.msg_queue.get(timeout=1)
+                item = self.msg_queue.get(timeout=1)
+                msg_type = item[0]
                 
-                # Automatically prepend a timestamp to every outgoing alert
-                timestamp = datetime.datetime.now().strftime("[%X]")
-                formatted_msg = f"⏱️ `{timestamp}`\n{raw_msg}"
-                
-                url = f"{self.base_url}/sendMessage"
-                payload = {"chat_id": self.chat_id, "text": formatted_msg, "parse_mode": "Markdown"}
-                
-                # Retry send with backoff (network can flake)
-                for attempt in range(3):
-                    try:
-                        # Increased timeout to 10. Telegram API sometimes takes >5s.
-                        requests.post(url, json=payload, timeout=10)
-                        break
-                    except requests.exceptions.RequestException as e:
-                        if attempt < 2:
-                            time.sleep(2 ** attempt)
-                        else:
-                            logger.error(f"Telegram send failed after 3 attempts")
-                
+                if msg_type == 'text':
+                    _, raw_msg, reply_markup = item
+                    timestamp = datetime.datetime.now().strftime("[%X]")
+                    formatted_msg = f"⏱️ `{timestamp}`\n{raw_msg}"
+                    
+                    url = f"{self.base_url}/sendMessage"
+                    payload = {"chat_id": self.chat_id, "text": formatted_msg, "parse_mode": "Markdown"}
+                    if reply_markup:
+                        payload['reply_markup'] = reply_markup
+                        
+                    # Retry send with backoff
+                    for attempt in range(3):
+                        try:
+                            requests.post(url, json=payload, timeout=10)
+                            break
+                        except requests.exceptions.RequestException as e:
+                            if attempt < 2: time.sleep(2 ** attempt)
+                            else: logger.error("Telegram send failed after 3 attempts")
+                            
+                elif msg_type == 'document':
+                    _, filepath, caption = item
+                    url = f"{self.base_url}/sendDocument"
+                    if os.path.exists(filepath):
+                        with open(filepath, 'rb') as doc:
+                            payload = {"chat_id": self.chat_id}
+                            if caption: payload["caption"] = caption
+                            files = {"document": doc}
+                            requests.post(url, data=payload, files=files, timeout=20)
+                            
                 self.msg_queue.task_done()
             except queue.Empty:
                 continue
@@ -131,12 +157,21 @@ class TelegramHandler:
                     
                     if "message" in update and "text" in update["message"]:
                         text = update["message"]["text"]
-                        
                         try:
                             self._dispatch_command(text)
                         except Exception as e:
                             logger.error(f"Telegram command error: {e}")
                             self.send_message(f"❌ Command error: {e}")
+                            
+                    elif "callback_query" in update:
+                        query = update["callback_query"]
+                        data = query.get("data", "")
+                        callback_id = query.get("id")
+                        self.answer_callback_query(callback_id)
+                        try:
+                            self._dispatch_command(data)
+                        except Exception as e:
+                            logger.error(f"Callback error: {e}")
             
             time.sleep(1)
 
@@ -161,23 +196,62 @@ class TelegramHandler:
         elif text == "/status":
             self._handle_status()
             
-        elif text == "/resume":
-            self._handle_resume()
+        elif text == "/menu" or text == "/start":
+            self._handle_menu()
             
         elif text == "/logs":
-            self._handle_logs()
+            self._handle_logs_menu()
             
-        elif text == "/start":
-            self.send_message("👋 I am Monie! Commands:\n/status — live trades\n/profit — ledger\n/token — auth Upstox\n/kill — emergency halt\n/resume — manual unkill\n/bus — event bus health\n/logs — tail live terminal")
+        elif text == "/log_50":
+            self._handle_logs(lines=50)
+            
+        elif text == "/log_file":
+            self._handle_log_download()
+            
+        elif text.startswith("/log "):
+            self._handle_log_by_date(text)
+            
 
-    def _handle_logs(self):
-        """Fetches the last 15 lines of the system journal directly from the OS."""
-        self.send_message("⏳ Fetching live terminal logs from EC2...")
+    def _handle_menu(self):
+        """Sends the interactive command menu."""
+        reply_markup = {
+            "inline_keyboard": [
+                [{"text": "📊 Status", "callback_data": "/status"}, {"text": "💰 PnL", "callback_data": "/profit"}],
+                [{"text": "🖥️ Logs Menu", "callback_data": "/logs"}, {"text": "📈 Event Bus", "callback_data": "/bus"}],
+                [{"text": "🟢 Resume", "callback_data": "/resume"}, {"text": "🔴 KILL SWITCH", "callback_data": "/kill"}]
+            ]
+        }
+        self.send_message("🤖 **Monie Institutional Console**\nSelect an action:", reply_markup=reply_markup)
+
+    def _handle_logs_menu(self):
+        """Interactive logs menu."""
+        reply_markup = {
+            "inline_keyboard": [
+                [{"text": "📄 Last 50 Lines", "callback_data": "/log_50"}],
+                [{"text": "📅 Fetch by Date", "callback_data": "/log_date_help"}],
+                [{"text": "📥 Download Full Log File", "callback_data": "/log_file"}]
+            ]
+        }
+        self.send_message("🖥️ **Log Management Console**\nChoose an option:", reply_markup=reply_markup)
+
+    def _handle_log_download(self):
+        """Uploads the entire journalctl log as a file."""
         import subprocess
         try:
-            # The ubuntu user is in the adm group, giving read access to journalctl natively.
+            self.send_message("⏳ Generating log file...")
+            log_path = "/tmp/monie_full.log"
+            subprocess.run(f"journalctl -u monie --no-pager > {log_path}", shell=True)
+            self.send_document(log_path, caption="🖥️ Full System Log")
+        except Exception as e:
+            self.send_message(f"⚠️ Failed to generate log file: {e}")
+
+    def _handle_logs(self, lines=15):
+        """Fetches the last N lines of the system journal directly from the OS."""
+        self.send_message(f"⏳ Fetching last {lines} lines...")
+        import subprocess
+        try:
             result = subprocess.run(
-                ["journalctl", "-u", "monie", "-n", "15", "--no-pager"], 
+                ["journalctl", "-u", "monie", "-n", str(lines), "--no-pager"], 
                 capture_output=True, text=True, timeout=10
             )
             logs = result.stdout.strip()
@@ -191,6 +265,33 @@ class TelegramHandler:
             self.send_message(f"💻 **Live Terminal Output**\n```\n{logs}\n```")
         except Exception as e:
             self.send_message(f"⚠️ Failed to fetch logs: {e}")
+
+    def _handle_log_by_date(self, text: str):
+        """Fetches logs for a specific date (e.g. /log 2026-04-06)."""
+        if text == "/log_date_help":
+            self.send_message("📅 To fetch logs for a specific date, type:\n`/log YYYY-MM-DD`\n\nExample: `/log 2026-04-06`")
+            return
+            
+        parts = text.split(" ")
+        if len(parts) < 2:
+            self.send_message("⚠️ Please provide a date. Format: `/log YYYY-MM-DD`")
+            return
+            
+        date_str = parts[1].strip()
+        self.send_message(f"⏳ Fetching logs for {date_str}...")
+        
+        import subprocess
+        try:
+            log_path = f"/tmp/monie_{date_str}.log"
+            cmd = f'journalctl -u monie --since "{date_str} 00:00:00" --until "{date_str} 23:59:59" --no-pager > {log_path}'
+            subprocess.run(cmd, shell=True)
+            
+            if os.path.exists(log_path) and os.path.getsize(log_path) > 0:
+                self.send_document(log_path, caption=f"📅 System Log: {date_str}")
+            else:
+                self.send_message(f"⚠️ No logs found for {date_str}.")
+        except Exception as e:
+            self.send_message(f"⚠️ Failed to generate log file: {e}")
 
     def _handle_kill(self):
         """Emergency remote kill switch — liquidates everything and trips circuit breaker."""

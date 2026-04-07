@@ -192,12 +192,12 @@ def _fast_flash_crash_monitor(event, risk_manager, orchestrator, telegram, broke
     """EventBus hook for instant wartime flash crash detection."""
     if hasattr(event, "symbol") and getattr(event, "symbol") == "NSE|Nifty 50":
         # Pull latest VIX from broker cache (since this is firing sub-millisecond on every trade)
-        vix = 15.0
         try:
-            if hasattr(broker, 'get_quote'):
-                cached = broker.get_quote("NSE|INDIA VIX")
-                if cached and cached > 0: vix = cached
-        except: pass
+            vix = broker.get_cached_quote("INDIA VIX")
+            if not vix or vix <= 0:
+                 vix = getattr(risk_manager, 'dynamic_vix_proxy', 25.0)
+        except Exception:
+            vix = getattr(risk_manager, 'dynamic_vix_proxy', 25.0)
         
         status = risk_manager.guard.check_flash_crash_rolling(event.ltp, current_vix=vix)
         
@@ -360,7 +360,7 @@ async def main_async():
             if (datetime.time(9, 0) <= now_time <= datetime.time(15, 45) 
                 and (now_ts - last_health_check) >= HEALTH_CHECK_INTERVAL):
                 last_health_check = now_ts
-                await _run_health_check(broker, risk_manager, orchestrator, telegram)
+                asyncio.create_task(_run_health_check(broker, risk_manager, orchestrator, telegram))
             
             # Yield control to the EventBus processing loop
             await asyncio.sleep(1)

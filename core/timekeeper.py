@@ -23,9 +23,11 @@ class TimeKeeper:
         t = timekeeper.time()          # time-only with drift correction
     """
     def __init__(self):
-        self._drift_ms = 0.0  # milliseconds ahead/behind NTP
+        self._drift_ms = 0.0
         self._synced = False
-        self._resync_interval = 4 * 3600  # 4 hours
+        self._resync_interval = 4 * 3600
+        self.avg_ping_ms = 10.0
+        self.dynamic_drift_threshold = max(1.0, self.avg_ping_ms * 0.5)
         self._start_sync_loop()
 
     def _start_sync_loop(self):
@@ -59,7 +61,7 @@ class TimeKeeper:
     def now(self) -> datetime.datetime:
         """Returns drift-corrected current datetime."""
         raw = datetime.datetime.now()
-        if self._synced and abs(self._drift_ms) > 100:  # Only correct if drift > 100ms
+        if self._synced and abs(self._drift_ms) > self.dynamic_drift_threshold:
             raw += datetime.timedelta(milliseconds=self._drift_ms)
         return raw
 

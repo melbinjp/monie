@@ -53,7 +53,7 @@ class VolatilityHarvester(BaseStrategy):
         """Reactive engine triggered by raw market ticks."""
         try:
             # Organically capture VIX updates from the feed
-            if event.symbol == "NSE_INDEX|India VIX" or event.symbol == "NSE|INDIA VIX":
+            if event.symbol == "INDIA_VIX":
                 self.current_vix = event.ltp
 
             now = datetime.datetime.now().time()

@@ -53,27 +53,15 @@ class DataSanitizer:
         if raw_price is None or raw_price <= 0:
             return self._get_lkg(symbol, now)
 
-        # Rule 1.5: Z-Score outlier detection (needs >= 5 data points for meaningful stats)
         history = self._history[symbol]
-        if len(history) >= 5:
-            mean = sum(history) / len(history)
-            variance = sum((p - mean) ** 2 for p in history) / len(history)
-            std_dev = math.sqrt(variance)
-            if std_dev > 0:
-                z_score = abs(raw_price - mean) / std_dev
-                if z_score > 3.0:
-                    logger.warning(
-                        f"🛡️ SANITIZER: Z-score outlier for {symbol}: "
-                        f"₹{raw_price:.2f} (z={z_score:.1f}, mean=₹{mean:.2f}, σ=₹{std_dev:.2f})"
-                    )
-                    return self._get_lkg(symbol, now)
 
-        # Rule 2: Spike rejection (> 50% jump from LKG within 2 seconds)
+        # Rule 2: Spike rejection using self-calibrating constraints
         if symbol in self._lkg and symbol in self._lkg_time:
             elapsed = now - self._lkg_time[symbol]
             if elapsed < 2.0 and self._lkg[symbol] > 0:
                 pct_change = abs(raw_price - self._lkg[symbol]) / self._lkg[symbol]
-                if pct_change > 0.50:
+                dynamic_threshold = max(0.10, getattr(self, 'dynamic_vix_proxy', 20.0) / 100 * 2.0)
+                if pct_change > dynamic_threshold:
                     logger.warning(
                         f"🛡️ SANITIZER: Rejected spike for {symbol}: "
                         f"₹{raw_price:.2f} vs LKG ₹{self._lkg[symbol]:.2f} "

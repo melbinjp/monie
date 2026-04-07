@@ -21,7 +21,7 @@ class PaperBroker(BaseBroker):
         self.realized_pnl = 0.0
         self.data_source = data_source_broker
         self.is_logged_in = True
-        self.sanitizer = DataSanitizer()  # Primitive 2
+        self.is_logged_in = True
     
     def __getattr__(self, name):
         """Delegate any unimplemented method to the underlying data source broker.
@@ -45,8 +45,7 @@ class PaperBroker(BaseBroker):
         if order_type == "MARKET":
             if self.data_source:
                 for _ in range(5):
-                    raw = self.data_source.get_quote(symbol)
-                    fill_price = self.sanitizer.clean(symbol, raw)  # Primitive 2
+                    fill_price = self.data_source.get_quote(symbol)
                     if fill_price > 0.0:
                         break
                     time.sleep(1)
@@ -113,11 +112,14 @@ class PaperBroker(BaseBroker):
         return order_id
 
     def get_quote(self, symbol):
-        """Fetches live quote with DataSanitizer cleaning."""
+        """Fetches live quote."""
         if self.data_source:
-            raw = self.data_source.get_quote(symbol)
-            return self.sanitizer.clean(symbol, raw)
+            return self.data_source.get_quote(symbol)
         return 100.0  # Mock
+
+    def get_cached_quote(self, symbol: str) -> float:
+        """Paper broker delegates to the underlying real broker"""
+        return self.data_source.get_cached_quote(symbol) if hasattr(self.data_source, 'get_cached_quote') else 0.0
 
     def get_pnl(self):
         """Calculates Realized + Unrealized PnL."""
