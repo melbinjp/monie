@@ -53,12 +53,22 @@ if ([string]::IsNullOrWhiteSpace($status)) {
     git push origin main
 }
 
-Write-Host "`n[5/5] Connecting to EC2 to pull and restart Monie Bot..." -ForegroundColor Cyan
+Write-Host "`n[5/6] Packing local files (Excluding .git and .venv)..." -ForegroundColor Cyan
+tar.exe -czvf monie_update.tar.gz --exclude=.git --exclude=.venv --exclude=__pycache__ .
+
+Write-Host "`n[6/6] Connecting to EC2 to push and restart Monie Bot..." -ForegroundColor Cyan
 $sshKey = "monie-key.pem"
 $ec2User = "ubuntu"
 $ec2Host = "13.205.207.244"
-$remoteCmd = "cd ~/monie && git pull origin main && sudo systemctl daemon-reload && sudo systemctl restart monie && sleep 2 && sudo systemctl status monie --no-pager"
 
+Write-Host "Transferring architecture via SCP..." -ForegroundColor Cyan
+scp -o StrictHostKeyChecking=no -i $sshKey monie_update.tar.gz "$ec2User@${ec2Host}:~/monie_update.tar.gz"
+
+$remoteCmd = "cd ~/monie && tar -xzvf ~/monie_update.tar.gz && sudo systemctl daemon-reload && sudo systemctl restart monie && sleep 2 && sudo systemctl status monie --no-pager"
+Write-Host "Extracting and restarting services on EC2..." -ForegroundColor Cyan
 ssh -o StrictHostKeyChecking=no -i $sshKey "$ec2User@$ec2Host" $remoteCmd
 
-Write-Host "`n✅ Deployment Complete! The bot has been updated and restarted on EC2." -ForegroundColor Green
+Write-Host "`nCleaning up local deployment artifact..." -ForegroundColor Yellow
+Remove-Item monie_update.tar.gz -Force -ErrorAction SilentlyContinue
+
+Write-Host "`n✅ Air-gapped Deployment Complete! The bot has been explicitly updated and restarted on EC2 natively." -ForegroundColor Green
