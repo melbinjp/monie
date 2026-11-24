@@ -4,6 +4,7 @@ from core.brokers.base_broker import BaseBroker
 from core.logger import get_logger
 from core.data_sanitizer import DataSanitizer
 from core.rate_limiter import RateLimiter, RetailRateLimiter
+from core.symbols import normalize_symbol
 import pandas as pd
 import datetime
 import threading
@@ -141,7 +142,7 @@ class UpstoxBroker(BaseBroker):
                     instrument_tokens.append(token)
             self.ws_client.subscribe(instrument_tokens)
 
-    def place_order(self, symbol, quantity, side, order_type="MARKET", price=0.0):
+    def place_order(self, symbol, quantity, side, order_type="MARKET", price=0.0, order_tag=None):
         if not self.is_logged_in: return None
         
         instrument_token = self._get_instrument_token(symbol)
@@ -152,7 +153,7 @@ class UpstoxBroker(BaseBroker):
         txn_type = "BUY" if side == "BUY" else "SELL"
         
         # Primitive 4: Idempotent order tag
-        order_tag = self.generate_order_tag("UPSTOX", symbol, side)
+        order_tag = order_tag or self.generate_order_tag("UPSTOX", symbol, side)
         
         # Build order request with SEBI Market Protection mandate
         order_params = dict(
@@ -507,8 +508,9 @@ class UpstoxBroker(BaseBroker):
                         if hasattr(val, "last_price") and val.last_price > 0:
                             sym = token_to_sym.get(key)
                             if sym:
-                                clean_price = self.sanitizer.clean(sym, val.last_price)
-                                tick = TickEvent(symbol=sym, ltp=clean_price, timestamp=time.time())
+                                normalized_sym = normalize_symbol(sym)
+                                clean_price = self.sanitizer.clean(normalized_sym, val.last_price)
+                                tick = TickEvent(symbol=normalized_sym, ltp=clean_price, timestamp=time.time())
                                 self.event_bus.publish(tick)
             except Exception as e:
                 logger.debug(f"REST poller cycle error: {e}")

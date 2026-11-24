@@ -4,6 +4,7 @@ from enum import Enum, auto
 from strategies.base_strategy import BaseStrategy
 from core.events import CleanTickEvent, FillEvent, OrderEvent
 from core.dynamic_stagger import DynamicStaggerEngine
+from core.symbols import is_india_vix, is_nifty50
 
 
 class StrategyState(Enum):
@@ -134,11 +135,11 @@ class IntradayShortStraddle(BaseStrategy):
         """Event-Driven Fast Path: dispatches to current state handler."""
         try:
             # Organically capture VIX updates (always, regardless of state)
-            if event.symbol == "INDIA_VIX":
+            if is_india_vix(event.symbol):
                 self.vix_now = event.ltp
 
             # Feed underlying price to stagger engine for RoC calculation
-            if event.symbol == "NIFTY_50":
+            if is_nifty50(event.symbol):
                 self.stagger_engine.on_tick(event.ltp)
 
             # Dispatch to current state handler

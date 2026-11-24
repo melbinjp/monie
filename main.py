@@ -31,6 +31,7 @@ from core.events import CleanTickEvent
 from core.oms import OrderManagementSystem
 from core.staging_manager import StagingManager
 from core.state_manager import StateManager
+from core.symbols import is_nifty50
 
 logger = get_logger(__name__)
 
@@ -190,7 +191,7 @@ async def _run_health_check(broker, risk_manager, orchestrator, telegram):
 
 def _fast_flash_crash_monitor(event, risk_manager, orchestrator, telegram, broker):
     """EventBus hook for instant wartime flash crash detection."""
-    if hasattr(event, "symbol") and getattr(event, "symbol") == "NSE|Nifty 50":
+    if hasattr(event, "symbol") and is_nifty50(getattr(event, "symbol")):
         # Pull latest VIX from broker cache (since this is firing sub-millisecond on every trade)
         try:
             vix = broker.get_cached_quote("INDIA VIX")

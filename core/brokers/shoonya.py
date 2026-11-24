@@ -52,7 +52,7 @@ class ShoonyaBroker(BaseBroker):
         # Assuming symbol is formatted as "Exchange|Token" or handled via search
         pass
 
-    def place_order(self, symbol: str, quantity: int, side: str, order_type: str = "MKT", price: float = 0.0, exchange="NSE"):
+    def place_order(self, symbol: str, quantity: int, side: str, order_type: str = "MKT", price: float = 0.0, order_tag: str = None, exchange="NSE"):
         """Places an order."""
         if not self.is_logged_in:
             return {"status": "error", "msg": "Not Logged In"}

@@ -9,6 +9,7 @@ import datetime
 from strategies.base_strategy import BaseStrategy
 from core.logger import get_logger
 from core.events import CleanTickEvent, FillEvent, OrderEvent
+from core.symbols import is_india_vix, is_nifty50
 
 logger = get_logger(__name__, strategy_name="MiddayScalp")
 
@@ -61,11 +62,11 @@ class AfternoonMomentumScalper(BaseStrategy):
     def on_tick(self, event: CleanTickEvent):
         """Reactive engine triggered by raw market ticks."""
         try:
-            if event.symbol == "INDIA_VIX":
+            if is_india_vix(event.symbol):
                 self.vix_now = event.ltp
 
             # We strictly track NIFTY 50 for breakouts
-            if event.symbol == "NIFTY_50":
+            if is_nifty50(event.symbol):
                 now = datetime.datetime.now().time()
 
                 # Phase 1: Range Building (12:30 - 13:30)
@@ -141,7 +142,7 @@ class AfternoonMomentumScalper(BaseStrategy):
     def on_fill(self, event: FillEvent):
         """Called by EventBus when OMS executes the order."""
         if event.order_tag == self.order_tag and event.side == "BUY":
-            self.entry_price = event.price
+            self.entry_price = event.fill_price
             # Strict 20% Initial SL on the long premium
             self.trailing_sl = self.entry_price * 0.80
             msg = f"✅ Wartime Scalp Filled: {event.symbol} @ {self.entry_price:.2f}\nStrict Initial SL: {self.trailing_sl:.2f}"
@@ -151,9 +152,9 @@ class AfternoonMomentumScalper(BaseStrategy):
 
         elif event.order_tag and self.order_tag and event.order_tag.startswith(self.order_tag) and event.side == "SELL":
             # Exit order filled
-            pnl = event.price - self.entry_price
+            pnl = event.fill_price - self.entry_price
             pnl_pct = (pnl / self.entry_price) * 100
-            msg = f"🏁 Wartime Scalp Closed: {event.symbol} @ {event.price:.2f}\nTrade PnL: {pnl_pct:+.2f}%"
+            msg = f"🏁 Wartime Scalp Closed: {event.symbol} @ {event.fill_price:.2f}\nTrade PnL: {pnl_pct:+.2f}%"
             logger.info(msg)
             if self.telegram: self.telegram.send_message(msg)
             self._reset_daily()

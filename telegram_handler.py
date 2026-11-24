@@ -146,6 +146,23 @@ class TelegramHandler:
         report = self.calculate_pnl()
         self.send_message(f"📅 **Daily Summary**\n{report}")
 
+    def _is_authorized_update(self, update: dict) -> bool:
+        """Accept commands only from the configured chat id."""
+        expected_chat_id = str(self.chat_id) if self.chat_id is not None else None
+        if not expected_chat_id:
+            return True
+
+        chat_id = None
+        if "message" in update and "chat" in update["message"]:
+            chat_id = update["message"]["chat"].get("id")
+        elif "callback_query" in update and "message" in update["callback_query"]:
+            chat_id = update["callback_query"]["message"].get("chat", {}).get("id")
+
+        authorized = str(chat_id) == expected_chat_id
+        if not authorized:
+            logger.warning(f"Unauthorized Telegram command attempt from chat_id={chat_id}")
+        return authorized
+
     def handle_commands(self):
         """Main loop for the bot thread."""
         logger.info("Telegram Bot Listening...")
@@ -154,6 +171,8 @@ class TelegramHandler:
             if updates and "result" in updates:
                 for update in updates["result"]:
                     self.last_update_id = update["update_id"]
+                    if not self._is_authorized_update(update):
+                        continue
                     
                     if "message" in update and "text" in update["message"]:
                         text = update["message"]["text"]
@@ -186,6 +205,9 @@ class TelegramHandler:
             
         elif text == "/kill":
             self._handle_kill()
+
+        elif text == "/resume":
+            self._handle_resume()
             
         elif text == "/bus":
             self._handle_bus_stats()

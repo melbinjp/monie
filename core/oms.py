@@ -50,6 +50,8 @@ class OrderManagementSystem:
             broker_positions = await loop.run_in_executor(None, self.broker.get_positions)
             if broker_positions:
                 logger.info(f"🔍 OMS Reconciliation: Found {len(broker_positions)} open positions at broker")
+                if hasattr(self.risk_manager, 'rebuild_exposure_from_positions'):
+                    self.risk_manager.rebuild_exposure_from_positions(broker_positions)
                 for sym, details in broker_positions.items():
                     logger.info(f"   📋 {sym}: qty={details.get('qty', '?')}, avg=₹{details.get('avg_price', 0):.2f}")
             else:
@@ -98,7 +100,8 @@ class OrderManagementSystem:
                 event.qty, 
                 event.side, 
                 event.order_type, 
-                event.price
+                event.price,
+                event.order_tag
             )
             
             if broker_order_id:

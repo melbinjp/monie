@@ -36,7 +36,7 @@ class BaseBroker(ABC):
         pass
         
     @abstractmethod
-    def place_order(self, symbol: str, quantity: int, side: str, order_type: str = "MARKET", price: float = 0.0):
+    def place_order(self, symbol: str, quantity: int, side: str, order_type: str = "MARKET", price: float = 0.0, order_tag: str = None):
         """Places a BUY/SELL order."""
         pass
         

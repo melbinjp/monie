@@ -9,6 +9,7 @@ from strategies.base_strategy import BaseStrategy
 from core.logger import get_logger
 from core.events import CleanTickEvent, FillEvent, OrderEvent
 from core.event_bus import EventBus
+from core.symbols import is_india_vix
 
 logger = get_logger(__name__, strategy_name="ThetaCrush")
 
@@ -54,7 +55,7 @@ class ThetaCrusher(BaseStrategy):
         """Reactive evaluation triggered by market ticks."""
         try:
             # Organic VIX tracking
-            if event.symbol == "INDIA_VIX":
+            if is_india_vix(event.symbol):
                 self.current_vix = event.ltp
             
             now = datetime.datetime.now().time()

@@ -8,6 +8,7 @@ import threading
 from core.logger import get_logger
 from core.event_bus import EventBus
 from core.events import TickEvent
+from core.symbols import normalize_symbol
 
 logger = get_logger(__name__)
 
@@ -197,14 +198,8 @@ class UpstoxWebSocketClient:
                     
                 if ltp > 0:
                     self.price_cache[instrument_key] = ltp
-                    
-                    # Agnostic Translation Layer: Convert Upstox string into standardized Internal Symbol
-                    routing_sym = instrument_key
-                    if instrument_key in ("NSE_INDEX|India VIX", "NSE|INDIA VIX"):
-                        routing_sym = "INDIA_VIX"
-                    elif instrument_key in ("NSE_INDEX|Nifty 50", "NSE|Nifty 50"):
-                        routing_sym = "NIFTY_50"
-                        
+                    routing_sym = normalize_symbol(instrument_key)
+
                     tick = TickEvent(symbol=routing_sym, ltp=ltp, timestamp=time.time())
                     self.event_bus.publish(tick)
         except Exception as e:

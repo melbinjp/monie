@@ -35,9 +35,9 @@ class PaperBroker(BaseBroker):
         logger.info("📝 Paper Trading: Authentication Successful (Simulated)")
         return True
         
-    def place_order(self, symbol, quantity, side, order_type="MARKET", price=0.0):
+    def place_order(self, symbol, quantity, side, order_type="MARKET", price=0.0, order_tag=None):
         """Simulates order placement with idempotent tagging."""
-        order_tag = self.generate_order_tag("PAPER", symbol, side)  # Primitive 4
+        order_tag = order_tag or self.generate_order_tag("PAPER", symbol, side)  # Primitive 4
         logger.info(f"📝 PAPER ORDER [{order_tag}]: {side} {quantity} {symbol} @ {order_type}")
         
         # 1. Get Simulated Fill Price

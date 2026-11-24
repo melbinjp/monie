@@ -126,24 +126,26 @@ class RiskManager:
             logger.critical(f"🛑 RATE LIMIT: {len(self._order_timestamps)} orders in last 60s (max {self._max_orders_per_minute})")
             return False, f"Rate limit exceeded: {self._max_orders_per_minute}/min"
         
+        is_sell_entry = event.side == "SELL" and not getattr(event, 'is_exit', False)
+
         # 3. Single-order notional value check (max 40% of capital)
         notional = event.qty * event.price if event.price > 0 else 0
         max_single_order = self.capital * 0.40
-        if notional > max_single_order and notional > 0:
+        if is_sell_entry and notional > max_single_order and notional > 0:
             logger.critical(f"🛑 REJECTED: Single order ₹{notional:.0f} > 40% capital ₹{max_single_order:.0f}")
             return False, f"Single order notional ₹{notional:.0f} exceeds 40% of capital"
         
         # 4. Total exposure check (max 200% of capital for option selling)
-        projected_exposure = self._open_exposure + notional
+        projected_exposure = self._open_exposure + notional if is_sell_entry else self._open_exposure
         max_total_exposure = self.capital * 2.0
-        if projected_exposure > max_total_exposure and notional > 0:
+        if projected_exposure > max_total_exposure and is_sell_entry and notional > 0:
             logger.critical(f"🛑 REJECTED: Total exposure ₹{projected_exposure:.0f} > 200% capital ₹{max_total_exposure:.0f}")
             return False, f"Total exposure ₹{projected_exposure:.0f} exceeds 200% of capital"
         
         # All checks passed — record the order
         self._order_timestamps.append(now)
         self.daily_trades += 1
-        if event.side == "SELL" and notional > 0:
+        if is_sell_entry and notional > 0:
             self._open_exposure += notional
             
         return True, "Valid Order"
@@ -153,6 +155,18 @@ class RiskManager:
         if side == "BUY" and price > 0:
             reduction = qty * price
             self._open_exposure = max(0.0, self._open_exposure - reduction)
+
+    def rebuild_exposure_from_positions(self, positions: dict):
+        """Rebuilds exposure from live broker positions after restart/reconciliation."""
+        exposure = 0.0
+        if isinstance(positions, dict):
+            for details in positions.values():
+                qty = details.get('qty', 0)
+                avg_price = details.get('avg_price', 0.0)
+                if qty < 0 and avg_price > 0:
+                    exposure += abs(qty) * float(avg_price)
+        self._open_exposure = exposure
+        logger.info(f"🔄 Risk exposure rebuilt from broker positions: ₹{self._open_exposure:.0f}")
     
     def calculate_trailing_stop(self, entry_price, current_price, current_sl, position_type="BUY"):
         """
