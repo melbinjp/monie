@@ -1,9 +1,22 @@
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import pandas as pd
 from backtest.engine import BacktestEngine
 from config import Config
 
 def simulate_capital(capital):
-    print(f"\nrunning Simulation for Capital: {capital}...")
+    data_file = "data/nifty_10year_1m.csv"
+    if not os.path.exists(data_file):
+        print(
+            f"Missing '{data_file}'. Run 'python tools/generate_dummy_data.py' "
+            "or 'python tools/download_github_data.py' first."
+        )
+        return None
+
+    print(f"\nRunning simulation for capital: {capital}...")
     
     # Dynamic Position Sizing: 1 Lot per 50k
     # Floor division to ensure safety. 
@@ -13,8 +26,6 @@ def simulate_capital(capital):
     qty = lots * 50
     
     print(f"Position Size: {lots} Lots ({qty} Qty)")
-    
-    data_file = "data/nifty_10year_1m.csv"
     
     class ScaledEngine(BacktestEngine):
         def __init__(self, *args, **kwargs):
@@ -117,6 +128,7 @@ if __name__ == "__main__":
     
     # Scenario 3: 100k (2 Lots)
     m3 = simulate_capital(100000)
-    
-    print("\n\nDETAILED MONTHLY (Scenario: 100,000 - 2 Lots)")
-    print(m3.tail(12))
+
+    if m3 is not None:
+        print("\n\nDETAILED MONTHLY (Scenario: 100,000 - 2 Lots)")
+        print(m3.tail(12))

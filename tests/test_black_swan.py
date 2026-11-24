@@ -1,3 +1,8 @@
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import pandas as pd
 from core.black_swan_guard import BlackSwanGuard
 from backtest.engine import BacktestEngine
@@ -18,7 +23,10 @@ def run_stress_test():
              else:
                  df['datetime'] = pd.to_datetime(df['datetime'])
     except FileNotFoundError:
-        print("Data file not found.")
+        print(
+            f"Missing '{data_file}'. Run 'python tools/generate_dummy_data.py' "
+            "or 'python tools/download_github_data.py' first."
+        )
         return
 
     # 2. Filter for March 2020 (The Crash)

@@ -1,20 +1,23 @@
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from backtest.engine import BacktestEngine
 from strategies.intraday_straddle import IntradayShortStraddle
 from config import Config
-import pandas as pd
 
 def run():
-    # Use the real 10-year data
     data_file = "data/nifty_10year_1m.csv"
-    
-    try:
-        # Verify file exists
-        pd.read_csv(data_file)
-    except FileNotFoundError:
-        print(f"❌ '{data_file}' not found. Please run 'python tools/download_github_data.py' first.")
+
+    if not os.path.exists(data_file):
+        print(
+            f"Missing '{data_file}'. Run 'python tools/generate_dummy_data.py' "
+            "or 'python tools/download_github_data.py' first."
+        )
         return
 
-    print(f"Running Backtest on Real Data (10 Years): {data_file}")
+    print(f"Running backtest on {data_file}...")
     
     engine = BacktestEngine(
         data_file=data_file,

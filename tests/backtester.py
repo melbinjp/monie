@@ -15,7 +15,8 @@ import threading
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import Config
-from core.events import CleanTickEvent, EventBus
+from core.event_bus import EventBus
+from core.events import CleanTickEvent
 from core.risk_manager import RiskManager
 from strategies.intraday_straddle import IntradayShortStraddle
 

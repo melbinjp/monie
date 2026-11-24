@@ -1,12 +1,14 @@
 [Unit]
-Description=Monie Trading Bot
-After=network.target
+Description=Monie trading bot
+Wants=network-online.target
+After=network-online.target
 
 [Service]
-User=ubuntu
-WorkingDirectory=/home/ubuntu/monie
-Environment="PATH=/home/ubuntu/monie/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-ExecStart=/home/ubuntu/monie/.venv/bin/python main.py
+User=monie
+WorkingDirectory=/opt/monie
+Environment=TZ=Asia/Kolkata
+UMask=0077
+ExecStart=/opt/monie/.venv/bin/python /opt/monie/main.py
 Restart=always
 RestartSec=10
 

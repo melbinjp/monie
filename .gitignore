@@ -14,6 +14,8 @@ env/
 
 # Secrets & Credentials — NEVER COMMIT
 .env
+.env.*
+!.env.example
 *.pem
 *.key
 
@@ -24,6 +26,9 @@ env/
 *.swo
 
 # State & Runtime Files
+*.db
+*.db-wal
+*.db-shm
 bot_state.json
 bot_state.json.bak
 bot_state.json.tmp
@@ -41,13 +46,20 @@ data/
 
 # Reports & Exports
 reports/
+engineering_report.txt
 trades_*.csv
+shielded_trades.csv
+monthly_pnl.csv
+shielded_monthly_pnl.csv
+execution_metrics.csv
+backtest_trades.csv
 staging_journal_aws.log
 staging_latest.log
 recent_journal.txt
 monie_journal.txt
 
 # Test artifacts
+.pytest_cache/
 test_output.txt
 results.txt
 verify_stderr.txt

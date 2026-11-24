@@ -1,3 +1,8 @@
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import pandas as pd
 from backtest.engine import BacktestEngine
 from config import Config
@@ -5,6 +10,12 @@ from config import Config
 def run_growth_vs_income():
     print("Running Growth vs. Income Simulation (2015-2024)...")
     data_file = "data/nifty_10year_1m.csv"
+    if not os.path.exists(data_file):
+        print(
+            f"Missing '{data_file}'. Run 'python tools/generate_dummy_data.py' "
+            "or 'python tools/download_github_data.py' first."
+        )
+        return
     
     # ---------------------------------------------------------
     # Custom Engine with Compounding & Withdrawal Logic

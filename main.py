@@ -15,7 +15,6 @@ import datetime
 socket.setdefaulttimeout(10.0)
 
 from config import Config
-from core.brokers.shoonya import ShoonyaBroker
 from core.risk_manager import RiskManager
 from core.strategy_orchestrator import StrategyOrchestrator
 from strategies.intraday_straddle import IntradayShortStraddle
@@ -45,38 +44,46 @@ _health_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="health"
 
 
 def get_broker_instance(config, event_bus):
-    """Factory function to return the appropriate broker instance."""
+    """Create the configured broker."""
     try:
         if config.BROKER == "SHOONYA":
+            from core.brokers.shoonya import ShoonyaBroker
+
             return ShoonyaBroker(config)
-            
+
         elif config.BROKER == "PAPER":
-            logger.info("📝 Starting in PAPER TRADING Mode...")
+            from core.brokers.paper import PaperBroker
+
             data_broker = None
-            source_name = getattr(config, 'PAPER_DATA_SOURCE', 'SHOONYA')
-            
+            source_name = config.PAPER_DATA_SOURCE
+
             if source_name == "SHOONYA":
-                logger.info("   Using SHOONYA for Live Data...")
+                from core.brokers.shoonya import ShoonyaBroker
+
                 data_broker = ShoonyaBroker(config)
             elif source_name == "UPSTOX":
-                logger.info("   Using UPSTOX for Live Data...")
                 from core.brokers.upstox import UpstoxBroker
+
                 data_broker = UpstoxBroker(config, event_bus=event_bus)
-            
-            if data_broker:
-                if not data_broker.authenticate():
-                     logger.warning(f"⚠️ {source_name} Login Failed. Paper mode will use Mock Data.")
-                     data_broker = None
-                else:
-                     logger.info(f"✅ {source_name} Connected for Live Quotes.")
-            
-            from core.brokers.paper import PaperBroker
+            elif source_name != "MOCK":
+                logger.error("Unknown paper data source: %s", source_name)
+                return None
+
+            if data_broker is not None and not data_broker.authenticate():
+                logger.warning("Could not connect to %s for paper quotes.", source_name)
+                data_broker = None
+
+            if data_broker is None:
+                logger.info("Paper mode uses mock quotes. No market data feed is active.")
+            else:
+                logger.info("Paper mode uses quotes from %s.", source_name)
             return PaperBroker(config, data_source_broker=data_broker)
-            
+
         elif config.BROKER == "UPSTOX":
             from core.brokers.upstox import UpstoxBroker
+
             return UpstoxBroker(config, event_bus=event_bus)
-            
+
         else:
             logger.error(f"❌ Unknown Broker: {config.BROKER}")
             return None
@@ -250,9 +257,8 @@ async def main_async():
         return
     telegram.send_message(f"✅ Logged into {Config.BROKER}")
 
-    # 2. Token validation (non-blocking, retries until 09:30)
-    token_valid = await validate_token(broker, telegram)
-    if not token_valid:
+    offline_paper = Config.BROKER == "PAPER" and broker.data_source is None
+    if not offline_paper and not await validate_token(broker, telegram):
         logger.warning("Proceeding with potentially expired token. Strategies may fail.")
 
     # 3. Dynamic Capital Sync from actual Upstox wallet
@@ -300,7 +306,10 @@ async def main_async():
         # Crucial kickstart: Subscribe to baseline indices to start driving the EventBus
         actual_data_broker.subscribe(["NSE|Nifty 50", "NSE|INDIA VIX", "NSE|Nifty Bank"])
 
-    logger.info("⏳ Waiting for Market Hours... (Event Loop Active)")
+    if offline_paper:
+        logger.info("Offline paper mode is ready.")
+    else:
+        logger.info("Event loop is ready for market data.")
     
     def is_trading_day():
         return datetime.datetime.now().weekday() < 5
@@ -324,10 +333,11 @@ async def main_async():
         if is_trading_day() and not telegram.token_updated_today:
             telegram.send_message("⚠️ Remember to update your Upstox Token today!\nReply with: `/token <your_token>`")
     
-    schedule.every().day.at("09:00").do(token_reminder)
-    schedule.every().day.at("09:14").do(lambda: risk_manager.reset_daily_stats() if is_trading_day() else None)
-    schedule.every().day.at("09:15").do(lambda: telegram.send_message("🔔 Market Open!") if is_trading_day() else None)
-    schedule.every().day.at("15:30").do(eod_evaluation)
+    if not offline_paper:
+        schedule.every().day.at("09:00").do(token_reminder)
+        schedule.every().day.at("09:14").do(lambda: risk_manager.reset_daily_stats() if is_trading_day() else None)
+        schedule.every().day.at("09:15").do(lambda: telegram.send_message("🔔 Market Open!") if is_trading_day() else None)
+        schedule.every().day.at("15:30").do(eod_evaluation)
     
     def memory_cleanup():
         try:
@@ -357,8 +367,8 @@ async def main_async():
             now_time = now.time()
             now_ts = time.time()
             
-            # Health checks during market window, throttled to HEALTH_CHECK_INTERVAL
-            if (datetime.time(9, 0) <= now_time <= datetime.time(15, 45) 
+            if (not offline_paper
+                and datetime.time(9, 0) <= now_time <= datetime.time(15, 45)
                 and (now_ts - last_health_check) >= HEALTH_CHECK_INTERVAL):
                 last_health_check = now_ts
                 asyncio.create_task(_run_health_check(broker, risk_manager, orchestrator, telegram))

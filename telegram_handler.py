@@ -150,7 +150,7 @@ class TelegramHandler:
         """Accept commands only from the configured chat id."""
         expected_chat_id = str(self.chat_id) if self.chat_id is not None else None
         if not expected_chat_id:
-            return True
+            return False
 
         chat_id = None
         if "message" in update and "chat" in update["message"]:
@@ -488,7 +488,10 @@ class TelegramHandler:
         self.send_message(status_msg)
 
     def start(self):
-        """Starts the local polling thread and the async dispatch queue."""
+        """Start Telegram only when the token and chat ID are set."""
+        if not self.base_url or not self.chat_id:
+            return
+
         t1 = threading.Thread(target=self.handle_commands)
         t1.daemon = True
         t1.start()

@@ -2,15 +2,14 @@
 Centralized Configuration for Project Monie (Indian Markets Edition)
 """
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).with_name(".env"))
 
 class Config:
-    # Broker Selection: "SHOONYA", "UPSTOX", or "PAPER"
-    BROKER = os.getenv("BROKER", "PAPER") # Default to PAPER for safety
-    USE_WEBSOCKET = True                  # Set to True to use Event-Driven WS, False for 3s Polling
-    PAPER_DATA_SOURCE = "UPSTOX"          # "SHOONYA" or "UPSTOX" for live data in paper mode
+    BROKER = os.getenv("BROKER", "PAPER").strip().upper()
+    USE_WEBSOCKET = True
     
     # Shoonya Credentials
     SHOONYA_USER_ID = os.getenv("SHOONYA_USER_ID")
@@ -24,11 +23,16 @@ class Config:
     UPSTOX_API_KEY = os.getenv("UPSTOX_API_KEY")
     UPSTOX_API_SECRET = os.getenv("UPSTOX_API_SECRET")
     UPSTOX_REDIRECT_URI = os.getenv("UPSTOX_REDIRECT_URI")
-    UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN") # For manual token entry
+    UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
+
+    # Use Upstox by default only when a token is present.
+    PAPER_DATA_SOURCE = os.getenv(
+        "PAPER_DATA_SOURCE", "UPSTOX" if UPSTOX_ACCESS_TOKEN else "MOCK"
+    ).strip().upper()
     
-    # Algo Trading Compliance (SEBI April 2026 mandates)
-    UPSTOX_ALGO_NAME = os.getenv("UPSTOX_ALGO_NAME", "dopy")  # Must match "My Apps" name in Upstox dashboard
-    UPSTOX_ALGO_ID = os.getenv("UPSTOX_ALGO_ID")               # Only for registered >10 OPS algos
+    # Set the app name and registered algorithm ID if Upstox requires them.
+    UPSTOX_ALGO_NAME = os.getenv("UPSTOX_ALGO_NAME")
+    UPSTOX_ALGO_ID = os.getenv("UPSTOX_ALGO_ID")
     
     # Risk Management
     CAPITAL = float(os.getenv("CAPITAL", "50000"))  # Trading Capital
